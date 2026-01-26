@@ -132,6 +132,65 @@ router.patch('/profile', authenticate, asyncHandler(async (req, res) => {
   });
 }));
 
+// PATCH /api/users/password - Change user password
+router.patch('/password', authenticate, asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+
+  // Validate request body
+  if (!currentPassword || !newPassword) {
+    throw new AppError('Current password and new password are required', 400);
+  }
+
+  // Get user with password field
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id }
+  });
+
+  if (!user) {
+    throw new AppError('User not found', 404);
+  }
+
+  // Check if user has password (OAuth users don't)
+  if (!user.password) {
+    throw new AppError('Password change not available for your account', 400);
+  }
+
+  // Verify current password
+  const { comparePassword, hashPassword } = require('../services/userService');
+  const isPasswordValid = await comparePassword(currentPassword, user.password);
+
+  if (!isPasswordValid) {
+    throw new AppError('Current password is incorrect', 401);
+  }
+
+  // Validate new password
+  if (newPassword.length < 6) {
+    throw new AppError('New password must be at least 6 characters', 400);
+  }
+
+  // Check if new password is same as current
+  const isSamePassword = await comparePassword(newPassword, user.password);
+  if (isSamePassword) {
+    throw new AppError('New password must be different from current password', 400);
+  }
+
+  // Hash new password
+  const hashedPassword = await hashPassword(newPassword);
+
+  // Update password
+  await prisma.user.update({
+    where: { id: req.user.id },
+    data: { password: hashedPassword }
+  });
+
+  console.log(`Password changed for user: ${user.username}`);
+
+  res.json({
+    success: true,
+    message: 'Password changed successfully'
+  });
+}));
+
 // GET /api/users/stats - Get user statistics
 router.get('/stats', authenticate, asyncHandler(async (req, res) => {
   const user = await prisma.user.findUnique({
