@@ -1,0 +1,398 @@
+// Prisma Schema for UNYIELD Fitness App
+// Migrated from MongoDB/Mongoose to PostgreSQL/Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== ENUMS ====================
+
+enum Region {
+  Global
+  London
+  Manchester
+  Birmingham
+  Leeds
+  Glasgow
+}
+
+enum Goal {
+  Hypertrophy
+  Leanness
+  Performance
+}
+
+enum Accolade {
+  admin
+  community_support
+  beta
+  staff
+  verified_athlete
+  founding_member
+  challenge_master
+}
+
+enum Provider {
+  email
+  google
+  apple
+  anonymous
+}
+
+enum FitnessLevel {
+  beginner
+  intermediate
+  advanced
+  elite
+}
+
+enum VideoStatus {
+  pending
+  approved
+  rejected
+}
+
+enum AppealStatus {
+  pending
+  approved
+  denied
+}
+
+enum ReportStatus {
+  pending
+  reviewed
+  resolved
+  dismissed
+}
+
+enum ReportType {
+  suspicious_lift
+  fake_video
+  inappropriate
+  spam
+  other
+}
+
+enum ChallengeType {
+  exercise
+  metric
+  custom
+}
+
+enum MetricType {
+  reps
+  weight
+  duration
+  workouts
+}
+
+enum CompletionType {
+  cumulative
+  single_session
+  best_effort
+}
+
+enum WinnerCriteria {
+  first_to_complete
+  highest_total
+  best_single
+}
+
+enum NotificationType {
+  rank_up
+  rank_down
+  streak_milestone
+  challenge_ending
+  challenge_complete
+  welcome
+}
+
+enum AdminActionType {
+  user_viewed
+  user_updated
+  user_deleted
+  user_banned
+  user_unbanned
+  accolade_added
+  accolade_removed
+  video_approved
+  video_rejected
+  appeal_approved
+  appeal_denied
+  report_resolved
+  report_dismissed
+  notification_sent
+  challenge_created
+  challenge_updated
+  challenge_deleted
+  settings_updated
+}
+
+enum AdminTargetType {
+  user
+  video
+  appeal
+  report
+  challenge
+  notification
+  settings
+}
+
+// ==================== MODELS ====================
+
+model User {
+  id               String       @id @default(cuid())
+  email            String?      @unique
+  password         String?
+  username         String?      @unique
+  name             String       @default("Grinder")
+  profileImage     String?      @db.Text
+  region           Region       @default(Global)
+  goal             Goal         @default(Hypertrophy)
+  bio              String       @default("") @db.VarChar(300)
+  fitnessLevel     FitnessLevel @default(beginner)
+  workoutFrequency String       @default("3-4")
+  preferredDays    String[]     @default([])
+  weight           Float?
+  height           Float?
+  age              Int?
+  accolades        Accolade[]   @default([])
+  provider         Provider     @default(email)
+  totalPoints      Int          @default(0)
+  weeklyPoints     Int          @default(0)
+  rank             Int          @default(99)
+  streak           Int          @default(0)
+  streakBest       Int          @default(0)
+  lastWorkoutDate  DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  // Relations - User as owner
+  workouts             Workout[]
+  videoSubmissions     VideoSubmission[]     @relation("UserVideos")
+  appeals              Appeal[]              @relation("UserAppeals")
+  reports              Report[]              @relation("ReporterReports")
+  notifications        Notification[]
+  userChallenges       UserChallenge[]
+  challengeSubmissions ChallengeSubmission[] @relation("UserChallengeSubmissions")
+  createdChallenges    Challenge[]
+  adminActions         AdminAction[]         @relation("AdminActions")
+
+  // Relations - User as verifier/reviewer
+  verifiedVideos      VideoSubmission[]     @relation("VerifiedBy")
+  reviewedAppeals     Appeal[]              @relation("ReviewedBy")
+  reviewedReports     Report[]              @relation("ReviewedReports")
+  verifiedSubmissions ChallengeSubmission[] @relation("VerifiedChallengeSubmissions")
+
+  @@index([region])
+  @@index([totalPoints(sort: Desc)])
+  @@index([weeklyPoints(sort: Desc)])
+}
+
+model Workout {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exercise  String
+  reps      Int
+  weight    Float?
+  duration  Int?
+  points    Int      @default(0)
+  notes     String?  @db.VarChar(500)
+  date      DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  videoSubmission VideoSubmission?
+
+  @@index([userId, date(sort: Desc)])
+  @@index([userId])
+}
+
+model VideoSubmission {
+  id              String      @id @default(cuid())
+  userId          String
+  user            User        @relation("UserVideos", fields: [userId], references: [id], onDelete: Cascade)
+  workoutId       String?     @unique
+  workout         Workout?    @relation(fields: [workoutId], references: [id], onDelete: SetNull)
+  exercise        String
+  reps            Int
+  weight          Float       @default(0)
+  duration        Int?
+  videoUrl        String?
+  thumbnailUrl    String?
+  status          VideoStatus @default(pending)
+  verifiedById    String?
+  verifiedBy      User?       @relation("VerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  verifiedByName  String?
+  verifiedAt      DateTime?
+  rejectionReason String?
+  pointsAwarded   Int         @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  appeal  Appeal?
+  reports Report[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+}
+
+model Challenge {
+  id               String         @id @default(cuid())
+  title            String
+  description      String
+  challengeType    ChallengeType  @default(exercise)
+  exercises        String[]       @default([])
+  customMetricName String?
+  metricType       MetricType     @default(reps)
+  target           Int
+  startDate        DateTime
+  endDate          DateTime
+  regionScope      String         @default("global")
+  isActive         Boolean        @default(true)
+  reward           Int            @default(100)
+  requiresVideo    Boolean        @default(true)
+  minVideoDuration Int            @default(5)
+  rules            String         @default("")
+  completionType   CompletionType @default(cumulative)
+  winnerCriteria   WinnerCriteria @default(first_to_complete)
+  maxParticipants  Int            @default(0)
+  createdById      String?
+  createdBy        User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  // Relations
+  userChallenges       UserChallenge[]
+  challengeSubmissions ChallengeSubmission[]
+
+  @@index([isActive, endDate])
+}
+
+model UserChallenge {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challengeId String
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  progress    Int       @default(0)
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, challengeId])
+  @@index([challengeId])
+}
+
+model ChallengeSubmission {
+  id              String      @id @default(cuid())
+  userId          String
+  user            User        @relation("UserChallengeSubmissions", fields: [userId], references: [id], onDelete: Cascade)
+  challengeId     String
+  challenge       Challenge   @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  exercise        String?
+  reps            Int         @default(0)
+  weight          Float       @default(0)
+  duration        Int         @default(0)
+  videoUri        String?
+  videoUrl        String?
+  serverVideoId   String?
+  value           Int
+  status          VideoStatus @default(pending)
+  verifiedById    String?
+  verifiedBy      User?       @relation("VerifiedChallengeSubmissions", fields: [verifiedById], references: [id], onDelete: SetNull)
+  verifiedAt      DateTime?
+  rejectionReason String?
+  notes           String?     @db.VarChar(500)
+  submittedAt     DateTime    @default(now())
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([challengeId, status])
+  @@index([userId, challengeId])
+  @@index([status, submittedAt(sort: Desc)])
+}
+
+model Appeal {
+  id                String          @id @default(cuid())
+  userId            String
+  user              User            @relation("UserAppeals", fields: [userId], references: [id], onDelete: Cascade)
+  videoSubmissionId String          @unique
+  videoSubmission   VideoSubmission @relation(fields: [videoSubmissionId], references: [id], onDelete: Cascade)
+  reason            String          @db.VarChar(1000)
+  status            AppealStatus    @default(pending)
+  reviewedById      String?
+  reviewedBy        User?           @relation("ReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedByName    String?
+  reviewedAt        DateTime?
+  reviewNotes       String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([status, createdAt])
+  @@index([userId])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  read      Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([userId, read, createdAt(sort: Desc)])
+}
+
+model AdminAction {
+  id         String          @id @default(cuid())
+  adminId    String
+  admin      User            @relation("AdminActions", fields: [adminId], references: [id], onDelete: Cascade)
+  adminName  String
+  action     AdminActionType
+  targetType AdminTargetType
+  targetId   String?
+  details    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime        @default(now())
+
+  @@index([adminId, createdAt(sort: Desc)])
+  @@index([action, createdAt(sort: Desc)])
+  @@index([targetType, targetId])
+}
+
+model Report {
+  id                String          @id @default(cuid())
+  reporterId        String
+  reporter          User            @relation("ReporterReports", fields: [reporterId], references: [id], onDelete: Cascade)
+  videoSubmissionId String
+  videoSubmission   VideoSubmission @relation(fields: [videoSubmissionId], references: [id], onDelete: Cascade)
+  reportType        ReportType
+  reason            String          @db.VarChar(500)
+  status            ReportStatus    @default(pending)
+  reviewedById      String?
+  reviewedBy        User?           @relation("ReviewedReports", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt        DateTime?
+  reviewNotes       String?
+  actionTaken       String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([status, createdAt])
+  @@index([videoSubmissionId])
+  @@index([reporterId])
+}
