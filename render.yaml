@@ -4,14 +4,15 @@ services:
     env: node
     region: oregon
     plan: free
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: npm run postinstall
+    startCommand: npx prisma db push --skip-generate && npm start
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
-      - key: JWT_SECRET
+      - key: DATABASE_URL
         sync: false
-      - key: MONGODB_URI
+      - key: JWT_SECRET
         sync: false
       - key: JWT_EXPIRES_IN
         value: 7d
@@ -19,3 +20,5 @@ services:
         value: 900000
       - key: RATE_LIMIT_MAX_REQUESTS
         value: 100
+      - key: ORACLE_SECRET
+        sync: false

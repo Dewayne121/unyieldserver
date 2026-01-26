@@ -1,4 +1,4 @@
-const prisma = require('../src/lib/prisma');
+const prisma = require('../src/prisma');
 
 const connectDB = async () => {
   try {

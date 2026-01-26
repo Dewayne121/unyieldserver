@@ -1,5 +1,5 @@
 const express = require('express');
-const prisma = require('../src/lib/prisma');
+const prisma = require('../src/prisma');
 const { EXERCISES, calcPoints, computeStreak } = require('../services/workoutService');
 const { updateRank } = require('../services/userService');
 const { authenticate } = require('../middleware/auth');

@@ -1,5 +1,5 @@
 const express = require('express');
-const prisma = require('../src/lib/prisma');
+const prisma = require('../src/prisma');
 const { authenticate } = require('../middleware/auth');
 const { requireAdmin, requireSuperAdmin, logAdminAction, isSuperAdmin } = require('../middleware/admin');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
@@ -27,11 +27,6 @@ router.get('/stats', authenticate, requireAdmin, asyncHandler(async (req, res) =
   ]);
 
   // Active users (users who logged workout in last 7 days)
-  const activeUsersCount = await prisma.workout.count({
-    where: { date: { gte: weekAgo } },
-    distinct: ['userId'],
-  }).then(count => count); // Prisma returns distinct count differently
-
   // Get distinct user IDs from workouts
   const activeWorkouts = await prisma.workout.findMany({
     where: { date: { gte: weekAgo } },
@@ -179,7 +174,7 @@ router.get('/stats', authenticate, requireAdmin, asyncHandler(async (req, res) =
       regionDistribution,
       topUsers,
     },
-  };
+  });
 }));
 
 // ============================================================================
@@ -403,7 +398,7 @@ router.get('/users/:id', authenticate, requireAdmin, asyncHandler(async (req, re
       recentVideos,
       auditLog,
     },
-  };
+  });
 }));
 
 // PATCH /api/admin/users/:id - Update user (admin only)
@@ -481,7 +476,7 @@ router.patch('/users/:id',
     res.json({
       success: true,
       data: await formatUserDetailResponse(updatedUser),
-    };
+    });
 }));
 
 // DELETE /api/admin/users/:id - Delete user (super admin only)
@@ -610,7 +605,7 @@ router.delete('/users/:id/accolades/:accolade',
     res.json({
       success: true,
       data: { accolades: updatedUser.accolades },
-    };
+    });
 }));
 
 // ============================================================================
@@ -765,7 +760,7 @@ router.get('/videos/:id', authenticate, requireAdmin, asyncHandler(async (req, r
       reports,
       appeal,
     },
-  };
+  });
 }));
 
 // POST /api/admin/videos/:id/verify - Verify video with enhanced logging
@@ -901,7 +896,7 @@ router.get('/appeals', authenticate, requireAdmin, asyncHandler(async (req, res)
         pages: Math.ceil(total / parseInt(limit)),
       },
     },
-  };
+  });
 }));
 
 // GET /api/admin/appeals/:id - Get appeal details
@@ -941,7 +936,7 @@ router.get('/appeals/:id', authenticate, requireAdmin, asyncHandler(async (req, 
       appeal,
       userVideoHistory,
     },
-  };
+  });
 }));
 
 // POST /api/admin/appeals/:id/review - Review appeal
@@ -1012,7 +1007,7 @@ router.post('/appeals/:id/review',
     res.json({
       success: true,
       data: updatedAppeal,
-    };
+    });
   }));
 
 // ============================================================================
@@ -1064,7 +1059,7 @@ router.get('/reports', authenticate, requireAdmin, asyncHandler(async (req, res)
         pages: Math.ceil(total / parseInt(limit)),
       },
     },
-  };
+  });
 }));
 
 // POST /api/admin/reports/:id/review - Review report
@@ -1130,7 +1125,7 @@ router.post('/reports/:id/review',
     res.json({
       success: true,
       data: updatedReport,
-    };
+    });
   }));
 
 // ============================================================================
@@ -1177,7 +1172,7 @@ router.post('/notifications/send',
       success: true,
       message: `Notification sent to ${userIds.length} user(s)`,
       data: { recipientCount: userIds.length },
-    };
+    });
   }));
 
 // POST /api/admin/notifications/broadcast - Send broadcast to all users
@@ -1222,7 +1217,7 @@ router.post('/notifications/broadcast',
       success: true,
       message: `Broadcast sent to ${users.length} user(s)`,
       data: { recipientCount: users.length },
-    };
+    });
   }));
 
 // ============================================================================
@@ -1280,7 +1275,7 @@ router.get('/audit-log', authenticate, requireAdmin, asyncHandler(async (req, re
         pages: Math.ceil(total / parseInt(limit)),
       },
     },
-  };
+  });
 }));
 
 // GET /api/admin/audit-log/:targetType/:targetId - Get audit log for specific target
@@ -1304,7 +1299,7 @@ router.get('/audit-log/:targetType/:targetId', authenticate, requireAdmin, async
   res.json({
     success: true,
     data: actions,
-  };
+  });
 }));
 
 module.exports = router;

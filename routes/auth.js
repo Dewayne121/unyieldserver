@@ -1,5 +1,5 @@
 const express = require('express');
-const prisma = require('../src/lib/prisma');
+const prisma = require('../src/prisma');
 const { hashPassword, comparePassword } = require('../services/userService');
 const { generateToken, authenticate } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');

@@ -1,5 +1,5 @@
 const express = require('express');
-const prisma = require('../src/lib/prisma');
+const prisma = require('../src/prisma');
 const { authenticate } = require('../middleware/auth');
 const { requireChallengeMaster, requireChallengeModerator, logAdminAction } = require('../middleware/admin');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
@@ -182,7 +182,7 @@ router.get('/',
         total,
         pages: Math.ceil(total / parseInt(limit)),
       },
-    };
+    });
   })
 );
 

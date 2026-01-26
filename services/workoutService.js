@@ -4,7 +4,7 @@
  * Extracted from Mongoose static methods for Prisma compatibility
  */
 
-const prisma = require('../src/lib/prisma');
+const prisma = require('../src/prisma');
 
 // Exercise catalog with intensity multipliers
 const EXERCISES = [

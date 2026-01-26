@@ -1,5 +1,4 @@
-const User = require('../models/User');
-const AdminAction = require('../models/AdminAction');
+const prisma = require('../src/prisma');
 const { AppError } = require('./errorHandler');
 
 /**
@@ -14,7 +13,9 @@ const requireAdmin = async (req, res, next) => {
     }
 
     // Fetch full user with accolades
-    const user = await User.findById(req.user.id);
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id }
+    });
 
     if (!user) {
       return next(new AppError('User not found', 404));
@@ -48,7 +49,9 @@ const requireSuperAdmin = async (req, res, next) => {
       return next(new AppError('Authentication required', 401));
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id }
+    });
 
     if (!user) {
       return next(new AppError('User not found', 404));
@@ -89,7 +92,7 @@ const logAdminAction = (action, targetType, targetIdParam, details) => {
 
     // Store the action data for logging after the request
     req.adminActionData = {
-      admin: req.adminUser._id,
+      adminId: req.adminUser.id,
       adminName: req.adminUser.name,
       action,
       targetType,
@@ -104,7 +107,9 @@ const logAdminAction = (action, targetType, targetIdParam, details) => {
     res.json = function(data) {
       // Log the action asynchronously (don't wait for it)
       if (req.adminActionData) {
-        AdminAction.logAction(req.adminActionData).catch(err => {
+        prisma.adminAction.create({
+          data: req.adminActionData
+        }).catch(err => {
           console.error('Failed to log admin action:', err);
         });
       }
@@ -144,7 +149,9 @@ const requireChallengeMaster = async (req, res, next) => {
       return next(new AppError('Authentication required', 401));
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id }
+    });
 
     if (!user) {
       return next(new AppError('User not found', 404));
@@ -177,7 +184,9 @@ const requireChallengeModerator = async (req, res, next) => {
       return next(new AppError('Authentication required', 401));
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id }
+    });
 
     if (!user) {
       return next(new AppError('User not found', 404));
