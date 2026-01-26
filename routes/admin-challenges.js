@@ -306,7 +306,7 @@ router.post('/',
         completionType,
         winnerCriteria,
         maxParticipants,
-        createdBy: req.user.id,
+        createdById: req.user.id,
         isActive: true,
       },
     });
