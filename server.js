@@ -78,6 +78,7 @@ app.get('/', (req, res) => {
     status: 'running',
     endpoints: {
       health: '/health',
+      healthApi: '/api/health',
       auth: '/api/auth',
       users: '/api/users',
       workouts: '/api/workouts',
@@ -93,6 +94,15 @@ app.get('/', (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  });
+});
+
+// Health check endpoint for platforms expecting /api prefix (e.g., Railway)
+app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
