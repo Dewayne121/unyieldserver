@@ -3,6 +3,7 @@ const prisma = require('../src/prisma');
 const { REGIONS, GOALS, FITNESS_LEVELS } = require('../services/userService');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
+const { getWeightClass } = require('../src/utils/strengthRatio');
 
 const router = express.Router();
 
@@ -23,6 +24,8 @@ const formatUserResponse = (user) => ({
   weight: user.weight,
   height: user.height,
   age: user.age,
+  weightClass: user.weightClass,
+  strengthRatio: user.strengthRatio,
   totalPoints: user.totalPoints,
   weeklyPoints: user.weeklyPoints,
   rank: user.rank,
@@ -119,6 +122,12 @@ router.patch('/profile', authenticate, asyncHandler(async (req, res) => {
       }
       updateData[key] = req.body[key];
     }
+  }
+
+  // Calculate weightClass if weight is being updated
+  if (updateData.weight !== undefined) {
+    const weightKg = updateData.weight;
+    updateData.weightClass = weightKg && weightKg > 0 ? getWeightClass(weightKg) : 'UNCLASSIFIED';
   }
 
   const updatedUser = await prisma.user.update({
