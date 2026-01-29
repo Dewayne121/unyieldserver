@@ -2,18 +2,31 @@ const express = require('express');
 const prisma = require('../src/prisma');
 const { optionalAuth } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { getWeightClassLabel, formatStrengthRatio } = require('../src/utils/strengthRatio');
 
 const router = express.Router();
 
-// GET /api/leaderboard - Get leaderboard
-// Supports types: 'total', 'weekly', 'monthly'
-// Monthly uses totalPoints for current month competition
+// GET /api/leaderboard - Get leaderboard by strength ratio
+// Now ranks by strengthRatio instead of points
+// Supports weight class filtering
 router.get('/', optionalAuth, asyncHandler(async (req, res) => {
-  const { region = 'Global', type = 'total', limit = 50, offset = 0 } = req.query;
+  const { region = 'Global', weightClass, limit = 50, offset = 0 } = req.query;
 
-  const where = region !== 'Global' ? { region } : {};
-  // For monthly competition, we use totalPoints (in future, could add monthlyPoints field)
-  const sortField = type === 'weekly' ? 'weeklyPoints' : 'totalPoints';
+  // Build where clause
+  const where = {};
+
+  // Region filter
+  if (region !== 'Global') {
+    where.region = region;
+  }
+
+  // Weight class filter
+  if (weightClass) {
+    where.weightClass = weightClass.toUpperCase();
+  } else {
+    // Default: exclude users without weight from main leaderboard
+    where.weightClass = { not: 'UNCLASSIFIED' };
+  }
 
   const [users, total] = await Promise.all([
     prisma.user.findMany({
@@ -24,31 +37,39 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         name: true,
         profileImage: true,
         region: true,
-        totalPoints: true,
-        weeklyPoints: true,
+        weight: true,
+        weightClass: true,
+        strengthRatio: true,
         streak: true,
         accolades: true,
+        // Include legacy points for backward compatibility
+        totalPoints: true,
+        weeklyPoints: true,
       },
-      orderBy: { [sortField]: 'desc' },
+      orderBy: { strengthRatio: 'desc' },
       skip: parseInt(offset),
       take: parseInt(limit),
     }),
     prisma.user.count({ where }),
   ]);
 
-  // Add ranks
+  // Add ranks and format response
   const leaderboard = users.map((user, index) => ({
     id: user.id,
     username: user.username,
     name: user.name,
     profileImage: user.profileImage,
     region: user.region,
-    totalPoints: user.totalPoints,
-    weeklyPoints: user.weeklyPoints,
+    weight: user.weight,
+    weightClass: user.weightClass,
+    weightClassLabel: getWeightClassLabel(user.weightClass),
+    strengthRatio: user.strengthRatio || 0,
+    ratioDisplay: formatStrengthRatio(user.strengthRatio),
     streak: user.streak,
     accolades: user.accolades || [],
     rank: parseInt(offset) + index + 1,
-    points: type === 'weekly' ? user.weeklyPoints : user.totalPoints,
+    // Legacy field for backward compatibility
+    points: Math.round((user.strengthRatio || 0) * 100),
   }));
 
   // Find current user's position
@@ -57,14 +78,23 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const currentUser = await prisma.user.findUnique({
       where: { id: req.user.id }
     });
+
     if (currentUser) {
-      const userPoints = currentUser[sortField] || 0;
-      const userPosition = await prisma.user.count({
-        where: {
-          ...where,
-          [sortField]: { gt: userPoints },
-        },
-      });
+      const userRatio = currentUser.strengthRatio || 0;
+
+      // Check if user qualifies for this filtered view
+      const userQualifies = (!weightClass || currentUser.weightClass === weightClass.toUpperCase()) &&
+                           currentUser.weightClass !== 'UNCLASSIFIED';
+
+      let userPosition = 0;
+      if (userQualifies) {
+        userPosition = await prisma.user.count({
+          where: {
+            ...where,
+            strengthRatio: { gt: userRatio },
+          },
+        });
+      }
 
       currentUserRank = {
         id: currentUser.id,
@@ -72,12 +102,16 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         name: currentUser.name,
         profileImage: currentUser.profileImage,
         region: currentUser.region,
-        totalPoints: currentUser.totalPoints,
-        weeklyPoints: currentUser.weeklyPoints,
+        weight: currentUser.weight,
+        weightClass: currentUser.weightClass,
+        weightClassLabel: getWeightClassLabel(currentUser.weightClass),
+        strengthRatio: userRatio,
+        ratioDisplay: formatStrengthRatio(userRatio),
         streak: currentUser.streak,
         accolades: currentUser.accolades || [],
-        rank: userPosition + 1,
-        points: type === 'weekly' ? currentUser.weeklyPoints : currentUser.totalPoints,
+        rank: userQualifies ? userPosition + 1 : null,
+        points: Math.round(userRatio * 100),
+        disqualified: !userQualifies,
       };
     }
   }
@@ -90,6 +124,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
       currentUser: currentUserRank,
       limit: parseInt(limit),
       offset: parseInt(offset),
+      filters: { region, weightClass },
     },
   });
 }));
@@ -335,6 +370,42 @@ router.get('/around-me', optionalAuth, asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: aroundMe,
+  });
+}));
+
+// GET /api/leaderboard/weight-classes - Get available weight classes with user counts
+router.get('/weight-classes', asyncHandler(async (req, res) => {
+  const weightClasses = [
+    { id: 'W55_64', label: '55-64 kg', minWeight: 55, maxWeight: 64 },
+    { id: 'W65_74', label: '65-74 kg', minWeight: 65, maxWeight: 74 },
+    { id: 'W75_84', label: '75-84 kg', minWeight: 75, maxWeight: 84 },
+    { id: 'W85_94', label: '85-94 kg', minWeight: 85, maxWeight: 94 },
+    { id: 'W95_109', label: '95-109 kg', minWeight: 95, maxWeight: 109 },
+    { id: 'W110_PLUS', label: '110+ kg', minWeight: 110, maxWeight: null },
+  ];
+
+  // Get user counts per weight class
+  const counts = await Promise.all(
+    weightClasses.map(async (wc) => {
+      const count = await prisma.user.count({
+        where: { weightClass: wc.id }
+      });
+      return { ...wc, userCount: count };
+    })
+  );
+
+  // Also get count of unclassified users
+  const unclassifiedCount = await prisma.user.count({
+    where: { weightClass: 'UNCLASSIFIED' }
+  });
+
+  res.json({
+    success: true,
+    data: {
+      weightClasses: counts,
+      unclassifiedCount,
+      totalCompeting: counts.reduce((sum, wc) => sum + wc.userCount, 0),
+    },
   });
 }));
 

@@ -112,6 +112,16 @@ enum NotificationType {
   welcome
 }
 
+enum WeightClass {
+  W55_64
+  W65_74
+  W75_84
+  W85_94
+  W95_109
+  W110_PLUS
+  UNCLASSIFIED
+}
+
 enum AdminActionType {
   user_viewed
   user_updated
@@ -169,6 +179,8 @@ model User {
   streak           Int          @default(0)
   streakBest       Int          @default(0)
   lastWorkoutDate  DateTime?
+  weightClass      WeightClass  @default(UNCLASSIFIED)
+  strengthRatio    Float        @default(0)
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
@@ -192,6 +204,8 @@ model User {
   @@index([region])
   @@index([totalPoints(sort: Desc)])
   @@index([weeklyPoints(sort: Desc)])
+  @@index([weightClass, strengthRatio(sort: Desc)])
+  @@index([region, weightClass, strengthRatio(sort: Desc)])
 }
 
 model Workout {
@@ -203,6 +217,7 @@ model Workout {
   weight    Float?
   duration  Int?
   points    Int      @default(0)
+  strengthRatio Float? @default(0)
   notes     String?  @db.VarChar(500)
   date      DateTime @default(now())
   createdAt DateTime @default(now())

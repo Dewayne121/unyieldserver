@@ -4,6 +4,7 @@ const { EXERCISES, calcPoints, computeStreak } = require('../services/workoutSer
 const { updateRank } = require('../services/userService');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
+const { calculateStrengthRatio, getWeightClass } = require('../src/utils/strengthRatio');
 
 const router = express.Router();
 
@@ -75,8 +76,19 @@ router.post('/', authenticate, asyncHandler(async (req, res) => {
     throw new AppError('User not found', 404);
   }
 
-  // Calculate points
-  const points = calcPoints(exercise, reps, weight || 0, user.streak);
+  // Calculate strength ratio (NEW primary scoring system)
+  let strengthRatio = 0;
+  if (user.weight && user.weight > 0 && weight && reps) {
+    const weightLifted = reps * weight;
+    strengthRatio = calculateStrengthRatio({
+      weightLifted,
+      bodyweight: user.weight,
+      reps
+    });
+  }
+
+  // Calculate legacy points (kept for backward compatibility, set to 0 for new system)
+  const points = 0; // Deprecated - strengthRatio is now used
 
   // Create workout
   const workout = await prisma.workout.create({
@@ -87,6 +99,7 @@ router.post('/', authenticate, asyncHandler(async (req, res) => {
       weight: weight || null,
       duration: duration || null,
       points,
+      strengthRatio,
       notes: notes || null,
       date: new Date(),
     },
@@ -95,7 +108,18 @@ router.post('/', authenticate, asyncHandler(async (req, res) => {
   // Update user stats
   const { streak, best } = await computeStreak(req.user.id);
 
-  // Calculate weekly points
+  // Update user's weight class and aggregate strength ratio
+  const userWeightClass = getWeightClass(user.weight);
+
+  // Get all user's approved workouts to recalculate aggregate strength ratio
+  const allWorkouts = await prisma.workout.findMany({
+    where: { userId: req.user.id }
+  });
+
+  // Aggregate all strength ratios
+  const totalStrengthRatio = allWorkouts.reduce((sum, w) => sum + (w.strengthRatio || 0), 0);
+
+  // Calculate weekly points (legacy - for backward compatibility)
   const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const weeklyWorkouts = await prisma.workout.findMany({
     where: {
@@ -105,18 +129,17 @@ router.post('/', authenticate, asyncHandler(async (req, res) => {
   });
   const weeklyPoints = weeklyWorkouts.reduce((sum, w) => sum + w.points, 0);
 
-  const newTotalPoints = user.totalPoints + points;
-  const newRank = updateRank(newTotalPoints);
-
+  // Update user
   const updatedUser = await prisma.user.update({
     where: { id: req.user.id },
     data: {
-      totalPoints: newTotalPoints,
+      totalPoints: 0, // Deprecated
       weeklyPoints,
+      strengthRatio: totalStrengthRatio,
+      weightClass: userWeightClass,
       streak,
       streakBest: Math.max(user.streakBest, best),
       lastWorkoutDate: workout.date,
-      rank: newRank,
     },
   });
 
@@ -124,9 +147,11 @@ router.post('/', authenticate, asyncHandler(async (req, res) => {
     success: true,
     data: {
       workout,
-      pointsEarned: points,
-      newTotal: updatedUser.totalPoints,
+      strengthRatio,
+      ratioDisplay: strengthRatio.toFixed(3),
+      totalStrengthRatio,
       streak: updatedUser.streak,
+      weightClass: userWeightClass,
     },
   });
 }));
