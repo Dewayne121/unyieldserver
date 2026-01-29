@@ -3,6 +3,7 @@ const prisma = require('../src/prisma');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { deleteVideo } = require('../services/objectStorage');
+const { calculateStrengthRatio, getWeightClass } = require('../src/utils/strengthRatio');
 
 const router = express.Router();
 
@@ -448,10 +449,60 @@ router.post('/:id/submit', authenticate, asyncHandler(async (req, res) => {
     },
   });
 
+  // Also create a workout log to update the user's strength ratio for main leaderboard
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    select: { weight: true }
+  });
+
+  let strengthRatio = 0;
+  if (user?.weight && user.weight > 0 && weight && reps) {
+    const weightLifted = reps * weight;
+    strengthRatio = calculateStrengthRatio({
+      weightLifted,
+      bodyweight: user.weight,
+      reps
+    });
+  }
+
+  // Create workout log (this will trigger the strength ratio update)
+  await prisma.workout.create({
+    data: {
+      userId: req.user.id,
+      exercise: exercise || 'Challenge',
+      reps: reps || 0,
+      weight: weight || 0,
+      duration: duration || 0,
+      points: 0, // Deprecated
+      strengthRatio,
+      date: new Date(),
+    },
+  });
+
+  // Recalculate user's aggregate strength ratio
+  const allWorkouts = await prisma.workout.findMany({
+    where: { userId: req.user.id }
+  });
+
+  const totalStrengthRatio = allWorkouts.reduce((sum, w) => sum + (w.strengthRatio || 0), 0);
+  const weightClass = getWeightClass(user?.weight || 0);
+
+  await prisma.user.update({
+    where: { id: req.user.id },
+    data: {
+      strengthRatio: totalStrengthRatio,
+      weightClass,
+    },
+  });
+
   res.status(201).json({
     success: true,
     message: 'Challenge entry submitted for verification',
-    data: submission,
+    data: {
+      ...submission,
+      strengthRatio: totalStrengthRatio,
+      weightClass,
+    },
   });
 }));
 
