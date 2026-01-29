@@ -4,6 +4,7 @@ const { authenticate } = require('../middleware/auth');
 const { requireAdmin, requireSuperAdmin, logAdminAction, isSuperAdmin } = require('../middleware/admin');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { REGIONS, GOALS, ACCOLADES } = require('../services/userService');
+const { getWeightClass } = require('../src/utils/strengthRatio');
 
 const router = express.Router();
 
@@ -215,6 +216,11 @@ const formatUserDetailResponse = async (user) => {
     bio: user.bio || '',
     accolades: user.accolades || [],
     provider: user.provider,
+    weight: user.weight,
+    height: user.height,
+    age: user.age,
+    weightClass: user.weightClass,
+    strengthRatio: user.strengthRatio,
     totalPoints: user.totalPoints,
     weeklyPoints: user.weeklyPoints,
     rank: user.rank,
@@ -415,7 +421,7 @@ router.patch('/users/:id',
       throw new AppError('User not found', 404);
     }
 
-    const allowedUpdates = ['name', 'username', 'email', 'region', 'goal', 'bio', 'profileImage', 'accolades', 'totalPoints', 'weeklyPoints', 'rank', 'streak', 'streakBest'];
+    const allowedUpdates = ['name', 'username', 'email', 'region', 'goal', 'bio', 'profileImage', 'accolades', 'weight', 'height', 'age', 'totalPoints', 'weeklyPoints', 'rank', 'streak', 'streakBest'];
 
     // Store changes for audit log
     const changes = {};
@@ -461,6 +467,12 @@ router.patch('/users/:id',
 
         updateData[key] = req.body[key];
       }
+    }
+
+    // Calculate weightClass if weight is being updated
+    if (updateData.weight !== undefined) {
+      const weightKg = updateData.weight;
+      updateData.weightClass = weightKg && weightKg > 0 ? getWeightClass(weightKg) : 'UNCLASSIFIED';
     }
 
     // Update the request's admin action data with changes
