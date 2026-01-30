@@ -2,6 +2,7 @@ const express = require('express');
 const prisma = require('../src/prisma');
 const { EXERCISES, calcPoints, computeStreak } = require('../services/workoutService');
 const { updateRank } = require('../services/userService');
+const { checkAndNotifyStreakMilestone, checkAndNotifyRankUp } = require('../services/notificationService');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { calculateStrengthRatio, getWeightClass } = require('../src/utils/strengthRatio');
@@ -142,6 +143,11 @@ router.post('/', authenticate, asyncHandler(async (req, res) => {
       lastWorkoutDate: workout.date,
     },
   });
+
+  // Check for streak milestone notification (if streak increased)
+  if (updatedUser.streak > user.streak) {
+    await checkAndNotifyStreakMilestone(req.user.id, updatedUser.streak);
+  }
 
   res.status(201).json({
     success: true,

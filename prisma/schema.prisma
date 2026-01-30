@@ -184,6 +184,20 @@ model User {
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
+  // Notification preferences (opt-in only)
+  notificationsEnabled   Boolean  @default(false)
+  pushToken              String?  // Expo push token
+
+  // Granular preferences (all default to false - opt-in)
+  notifyRankUp           Boolean  @default(false)
+  notifyRankDownWeekly   Boolean  @default(false)
+  notifyStreakMilestone  Boolean  @default(false)
+  notifyNewChallenges    Boolean  @default(false)
+  notifyChallengeEnding  Boolean  @default(false)
+
+  // Tracking for weekly digest
+  lastRankDigestSentAt   DateTime?
+
   // Relations - User as owner
   workouts             Workout[]
   videoSubmissions     VideoSubmission[]     @relation("UserVideos")
@@ -358,16 +372,19 @@ model Appeal {
 }
 
 model Notification {
-  id        String           @id @default(cuid())
-  userId    String
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type      NotificationType
-  title     String
-  message   String
-  read      Boolean          @default(false)
-  readAt    DateTime?
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  id                   String           @id @default(cuid())
+  userId               String
+  user                 User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type                 NotificationType
+  title                String
+  message              String
+  read                 Boolean          @default(false)
+  readAt               DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  pushNotificationId   String?          // Expo push notification ID
+  pushNotificationSent Boolean          @default(false)
+  data                 Json?            // Additional data for deep linking
 
   @@index([userId, read, createdAt(sort: Desc)])
 }

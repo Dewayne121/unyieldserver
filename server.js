@@ -10,6 +10,16 @@ const { connectDB, disconnectDB } = require('./config/database');
 // Connect to PostgreSQL
 connectDB();
 
+// Initialize scheduled jobs (only in production)
+if (process.env.NODE_ENV === 'production') {
+  const { initializeWeeklyRankDigest } = require('./jobs/weeklyRankDigest');
+  const { initializeChallengeEndingNotifier } = require('./jobs/challengeEndingNotifier');
+
+  initializeWeeklyRankDigest();
+  initializeChallengeEndingNotifier();
+  console.log('Scheduled jobs initialized');
+}
+
 // Import routes
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');

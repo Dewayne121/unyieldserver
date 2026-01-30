@@ -3,6 +3,7 @@ const prisma = require('../src/prisma');
 const { authenticate } = require('../middleware/auth');
 const { requireChallengeMaster, requireChallengeModerator, logAdminAction } = require('../middleware/admin');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
+const { notifyNewChallenge } = require('../services/notificationService');
 
 const router = express.Router();
 
@@ -321,6 +322,9 @@ router.post('/',
         regionScope: challenge.regionScope,
       };
     }
+
+    // Notify opted-in users of new challenge
+    await notifyNewChallenge(challenge);
 
     res.status(201).json({
       success: true,

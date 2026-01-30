@@ -116,4 +116,101 @@ router.delete('/', authenticate, asyncHandler(async (req, res) => {
   });
 }));
 
+// POST /api/notifications/push-token - Register Expo push token
+router.post('/push-token', authenticate, asyncHandler(async (req, res) => {
+  const { pushToken } = req.body;
+
+  if (!pushToken) {
+    throw new AppError('Push token is required', 400);
+  }
+
+  // Validate Expo push token format
+  const { Expo } = require('expo-server-sdk');
+  if (!Expo.isExpoPushToken(pushToken)) {
+    throw new AppError('Invalid push token format', 400);
+  }
+
+  await prisma.user.update({
+    where: { id: req.user.id },
+    data: { pushToken },
+  });
+
+  console.log(`User ${req.user.id} registered push token`);
+
+  res.json({
+    success: true,
+    message: 'Push token registered successfully',
+  });
+}));
+
+// GET /api/notifications/preferences - Get user's notification preferences
+router.get('/preferences', authenticate, asyncHandler(async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    select: {
+      notificationsEnabled: true,
+      pushToken: true,
+      notifyRankUp: true,
+      notifyRankDownWeekly: true,
+      notifyStreakMilestone: true,
+      notifyNewChallenges: true,
+      notifyChallengeEnding: true,
+    },
+  });
+
+  if (!user) {
+    throw new AppError('User not found', 404);
+  }
+
+  res.json({
+    success: true,
+    data: user,
+  });
+}));
+
+// PATCH /api/notifications/preferences - Update notification preferences
+router.patch('/preferences', authenticate, asyncHandler(async (req, res) => {
+  const allowedUpdates = [
+    'notificationsEnabled',
+    'notifyRankUp',
+    'notifyRankDownWeekly',
+    'notifyStreakMilestone',
+    'notifyNewChallenges',
+    'notifyChallengeEnding',
+  ];
+
+  const updateData = {};
+
+  for (const key of allowedUpdates) {
+    if (req.body[key] !== undefined) {
+      // Validate boolean values
+      if (typeof req.body[key] !== 'boolean') {
+        throw new AppError(`${key} must be a boolean`, 400);
+      }
+      updateData[key] = req.body[key];
+    }
+  }
+
+  const updatedUser = await prisma.user.update({
+    where: { id: req.user.id },
+    data: updateData,
+    select: {
+      notificationsEnabled: true,
+      notifyRankUp: true,
+      notifyRankDownWeekly: true,
+      notifyStreakMilestone: true,
+      notifyNewChallenges: true,
+      notifyChallengeEnding: true,
+    },
+  });
+
+  console.log(`User ${req.user.id} updated notification preferences`, updateData);
+
+  res.json({
+    success: true,
+    data: updatedUser,
+    message: 'Notification preferences updated successfully',
+  });
+}));
+
 module.exports = router;
