@@ -107,6 +107,7 @@ enum NotificationType {
   rank_up
   rank_down
   streak_milestone
+  new_challenge
   challenge_ending
   challenge_complete
   welcome

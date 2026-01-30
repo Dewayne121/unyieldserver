@@ -177,7 +177,7 @@ const checkAndNotifyStreakMilestone = async (userId, streak) => {
       return false;
     }
 
-    const title = '🔥 Streak Milestone!';
+    const title = 'Streak Milestone!';
     const message = `Congratulations! You've reached a ${streak}-day streak! Keep pushing!`;
 
     await notifyUser(userId, 'streak_milestone', title, message, {
@@ -208,7 +208,7 @@ const checkAndNotifyRankUp = async (userId, oldRank, newRank) => {
     }
 
     const rankChange = oldRank - newRank;
-    const title = '📈 Rank Up!';
+    const title = 'Rank Up!';
     const message = `You moved up ${rankChange} position${rankChange > 1 ? 's' : ''}! Your new rank is #${newRank}.`;
 
     await notifyUser(userId, 'rank_up', title, message, {
@@ -235,24 +235,24 @@ const notifyNewChallenge = async (challenge) => {
       where: {
         notificationsEnabled: true,
         notifyNewChallenges: true,
-        pushToken: { not: null },
       },
       select: {
         id: true,
-        pushToken: true,
       },
     });
 
-    const title = '🏆 New Challenge!';
+    const title = 'New Challenge!';
     const message = `New challenge "${challenge.title}" is now available! Check it out.`;
 
     let notifiedCount = 0;
     for (const user of users) {
-      await sendPushNotification(user.pushToken, title, message, {
+      const notification = await notifyUser(user.id, 'new_challenge', title, message, {
         screen: 'ChallengeDetail',
         challengeId: challenge.id,
       });
-      notifiedCount++;
+      if (notification) {
+        notifiedCount++;
+      }
     }
 
     console.log(`notifyNewChallenge: Notified ${notifiedCount} users of new challenge ${challenge.id}`);
@@ -288,17 +288,19 @@ const notifyChallengeEndingSoon = async (challenge) => {
       },
     });
 
-    const title = '⏰ Challenge Ending Soon!';
+    const title = 'Challenge Ending Soon!';
     const message = `"${challenge.title}" ends in 24 hours! Make sure to submit your entry.`;
 
     let notifiedCount = 0;
     for (const uc of userChallenges) {
-      if (uc.user.notificationsEnabled && uc.user.notifyChallengeEnding && uc.user.pushToken) {
-        await sendPushNotification(uc.user.pushToken, title, message, {
+      if (uc.user.notificationsEnabled && uc.user.notifyChallengeEnding) {
+        const notification = await notifyUser(uc.user.id, 'challenge_ending', title, message, {
           screen: 'ChallengeDetail',
           challengeId: challenge.id,
         });
-        notifiedCount++;
+        if (notification) {
+          notifiedCount++;
+        }
       }
     }
 
@@ -323,13 +325,13 @@ const sendWeeklyRankDigest = async (userId, oldRank, newRank) => {
     let title, message;
 
     if (rankChange > 0) {
-      title = '📊 Weekly Rank Report';
+      title = 'Weekly Rank Report';
       message = `You moved up ${rankChange} position${rankChange > 1 ? 's' : ''} this week! Your new rank is #${newRank}.`;
     } else if (rankChange < 0) {
-      title = '📊 Weekly Rank Report';
+      title = 'Weekly Rank Report';
       message = `You moved down ${Math.abs(rankChange)} position${Math.abs(rankChange) > 1 ? 's' : ''} this week. Your current rank is #${newRank}. Keep pushing!`;
     } else {
-      title = '📊 Weekly Rank Report';
+      title = 'Weekly Rank Report';
       message = `Your rank remained stable this week at #${newRank}.`;
     }
 
