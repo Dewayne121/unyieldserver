@@ -100,10 +100,16 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
   const { region = 'global', includeExpired = 'false' } = req.query;
   const now = new Date();
 
+  // Normalize region to lowercase for comparison
+  const normalizedRegion = region.toLowerCase();
+
   const where = {
     OR: [
       { regionScope: 'global' },
-      { regionScope: region.toLowerCase() },
+      { regionScope: 'Global' },
+      { regionScope: normalizedRegion },
+      // Also check with first letter capitalized (common pattern)
+      { regionScope: normalizedRegion.charAt(0).toUpperCase() + normalizedRegion.slice(1) },
     ],
   };
 
@@ -116,6 +122,10 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     where,
     orderBy: { createdAt: 'desc' },
   });
+
+  console.log('[CHALLENGES] Query params:', { region, includeExpired, normalizedRegion });
+  console.log('[CHALLENGES] Found challenges:', challenges.length);
+  console.log('[CHALLENGES] Challenge regions:', challenges.map(c => ({ id: c.id, title: c.title, regionScope: c.regionScope, isActive: c.isActive, endDate: c.endDate })));
 
   // Add user progress if authenticated
   if (req.user) {
