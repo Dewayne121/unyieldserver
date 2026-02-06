@@ -4,9 +4,97 @@ const { authenticate } = require('../middleware/auth');
 const { requireAdmin, requireSuperAdmin, logAdminAction, isSuperAdmin } = require('../middleware/admin');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { REGIONS, GOALS, ACCOLADES } = require('../services/userService');
+const { sendPushNotification } = require('../services/notificationService');
 const { getWeightClass } = require('../src/utils/strengthRatio');
 
 const router = express.Router();
+
+const VALID_NOTIFICATION_TYPES = new Set([
+  'rank_up',
+  'rank_down',
+  'streak_milestone',
+  'new_challenge',
+  'challenge_ending',
+  'challenge_complete',
+  'welcome',
+]);
+const DEFAULT_NOTIFICATION_TYPE = 'welcome';
+const NOTIFICATION_CHUNK_SIZE = 50;
+
+const normalizeNotificationType = (type) => {
+  const normalized = String(type || '').trim().toLowerCase();
+  if (!normalized) return DEFAULT_NOTIFICATION_TYPE;
+  return VALID_NOTIFICATION_TYPES.has(normalized) ? normalized : DEFAULT_NOTIFICATION_TYPE;
+};
+
+const sanitizeNotificationData = (data) => {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+  return data;
+};
+
+const sendAdminNotifications = async ({
+  users,
+  requestedType,
+  normalizedType,
+  title,
+  message,
+  adminUser,
+  extraData = {},
+  recipientMode = 'direct',
+}) => {
+  let createdCount = 0;
+  let pushAttempted = 0;
+  let pushSent = 0;
+
+  for (let i = 0; i < users.length; i += NOTIFICATION_CHUNK_SIZE) {
+    const chunk = users.slice(i, i + NOTIFICATION_CHUNK_SIZE);
+    // Process a bounded batch in parallel to avoid overwhelming Expo or DB connections.
+    const chunkResults = await Promise.all(chunk.map(async (user) => {
+      const data = {
+        ...extraData,
+        source: 'admin_panel',
+        recipientMode,
+        screen: 'Notifications',
+        requestedType: requestedType || DEFAULT_NOTIFICATION_TYPE,
+        sentByAdminId: adminUser?.id || null,
+        sentByAdminName: adminUser?.name || null,
+      };
+
+      const notification = await prisma.notification.create({
+        data: {
+          userId: user.id,
+          type: normalizedType,
+          title,
+          message,
+          read: false,
+          data,
+        },
+      });
+
+      if (!user.pushToken) {
+        return { created: true, pushAttempted: false, pushSent: false };
+      }
+
+      const sent = await sendPushNotification(
+        user.pushToken,
+        title,
+        message,
+        data,
+        notification.id
+      );
+
+      return { created: true, pushAttempted: true, pushSent: sent };
+    }));
+
+    for (const result of chunkResults) {
+      if (result.created) createdCount++;
+      if (result.pushAttempted) pushAttempted++;
+      if (result.pushSent) pushSent++;
+    }
+  }
+
+  return { createdCount, pushAttempted, pushSent };
+};
 
 // ============================================================================
 // DASHBOARD & ANALYTICS
@@ -1150,40 +1238,82 @@ router.post('/notifications/send',
   requireAdmin,
   logAdminAction('notification_sent', 'notification', null, null),
   asyncHandler(async (req, res) => {
-    const { userIds, type, title, message } = req.body;
+    const { userIds, type, title, message, data } = req.body;
 
-    if (!type || !title || !message) {
-      throw new AppError('Type, title, and message are required', 400);
+    if (!title || !message) {
+      throw new AppError('Title and message are required', 400);
     }
 
     if (!Array.isArray(userIds) || userIds.length === 0) {
       throw new AppError('userIds must be a non-empty array', 400);
     }
 
-    const notifications = userIds.map(userId => ({
-      userId,
-      type,
-      title,
-      message,
-      read: false,
-    }));
+    const titleValue = String(title).trim();
+    const messageValue = String(message).trim();
+    if (!titleValue || !messageValue) {
+      throw new AppError('Title and message cannot be empty', 400);
+    }
 
-    await prisma.notification.createMany({
-      data: notifications,
+    const uniqueUserIds = [...new Set(userIds
+      .map(id => String(id || '').trim())
+      .filter(Boolean))];
+
+    if (uniqueUserIds.length === 0) {
+      throw new AppError('No valid user IDs provided', 400);
+    }
+
+    const requestedType = String(type || '').trim().toLowerCase();
+    const normalizedType = normalizeNotificationType(requestedType);
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: uniqueUserIds } },
+      select: {
+        id: true,
+        pushToken: true,
+      },
+    });
+
+    if (users.length === 0) {
+      throw new AppError('No users found for the provided IDs', 404);
+    }
+
+    const foundUserIds = new Set(users.map(u => u.id));
+    const missingUserIds = uniqueUserIds.filter(id => !foundUserIds.has(id));
+
+    const result = await sendAdminNotifications({
+      users,
+      requestedType,
+      normalizedType,
+      title: titleValue,
+      message: messageValue,
+      adminUser: req.adminUser,
+      extraData: sanitizeNotificationData(data),
+      recipientMode: 'direct',
     });
 
     if (req.adminActionData) {
       req.adminActionData.details = {
-        recipientCount: userIds.length,
-        type,
-        title,
+        recipientCount: users.length,
+        missingRecipients: missingUserIds.length,
+        requestedType: requestedType || DEFAULT_NOTIFICATION_TYPE,
+        storedType: normalizedType,
+        title: titleValue,
+        pushAttempted: result.pushAttempted,
+        pushSent: result.pushSent,
       };
     }
 
     res.json({
       success: true,
-      message: `Notification sent to ${userIds.length} user(s)`,
-      data: { recipientCount: userIds.length },
+      message: `Notification sent to ${users.length} user(s)`,
+      data: {
+        recipientCount: users.length,
+        missingUserIds,
+        requestedType: requestedType || DEFAULT_NOTIFICATION_TYPE,
+        storedType: normalizedType,
+        pushAttempted: result.pushAttempted,
+        pushSent: result.pushSent,
+      },
     });
   }));
 
@@ -1193,34 +1323,48 @@ router.post('/notifications/broadcast',
   requireSuperAdmin,
   logAdminAction('notification_sent', 'notification', null, null),
   asyncHandler(async (req, res) => {
-    const { type, title, message } = req.body;
+    const { type, title, message, data } = req.body;
 
-    if (!type || !title || !message) {
-      throw new AppError('Type, title, and message are required', 400);
+    if (!title || !message) {
+      throw new AppError('Title and message are required', 400);
     }
 
-    // Get all users
+    const titleValue = String(title).trim();
+    const messageValue = String(message).trim();
+    if (!titleValue || !messageValue) {
+      throw new AppError('Title and message cannot be empty', 400);
+    }
+
+    const requestedType = String(type || '').trim().toLowerCase();
+    const normalizedType = normalizeNotificationType(requestedType);
+
+    // Get all users and send push notifications when tokens exist.
     const users = await prisma.user.findMany({
-      select: { id: true },
+      select: {
+        id: true,
+        pushToken: true,
+      },
     });
 
-    const notifications = users.map(user => ({
-      userId: user.id,
-      type,
-      title,
-      message,
-      read: false,
-    }));
-
-    await prisma.notification.createMany({
-      data: notifications,
+    const result = await sendAdminNotifications({
+      users,
+      requestedType,
+      normalizedType,
+      title: titleValue,
+      message: messageValue,
+      adminUser: req.adminUser,
+      extraData: sanitizeNotificationData(data),
+      recipientMode: 'broadcast',
     });
 
     if (req.adminActionData) {
       req.adminActionData.details = {
         recipientCount: users.length,
-        type,
-        title,
+        requestedType: requestedType || DEFAULT_NOTIFICATION_TYPE,
+        storedType: normalizedType,
+        title: titleValue,
+        pushAttempted: result.pushAttempted,
+        pushSent: result.pushSent,
         broadcast: true,
       };
     }
@@ -1228,7 +1372,13 @@ router.post('/notifications/broadcast',
     res.json({
       success: true,
       message: `Broadcast sent to ${users.length} user(s)`,
-      data: { recipientCount: users.length },
+      data: {
+        recipientCount: users.length,
+        requestedType: requestedType || DEFAULT_NOTIFICATION_TYPE,
+        storedType: normalizedType,
+        pushAttempted: result.pushAttempted,
+        pushSent: result.pushSent,
+      },
     });
   }));
 
