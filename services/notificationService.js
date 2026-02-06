@@ -5,6 +5,7 @@
 
 const { Expo } = require('expo-server-sdk');
 const prisma = require('../src/prisma');
+const PUSH_CHANNEL_ID = 'unyield_high_priority';
 
 // Create Expo client
 const expo = new Expo();
@@ -116,6 +117,7 @@ const sendPushNotification = async (pushToken, title, message, data = {}, notifi
     const expoMessage = {
       to: pushToken,
       sound: 'default',
+      channelId: PUSH_CHANNEL_ID,
       title,
       body: message,
       data: data,
