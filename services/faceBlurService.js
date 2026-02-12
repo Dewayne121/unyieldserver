@@ -15,7 +15,10 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 
 // Google Cloud Vision API endpoint
 const VISION_API_URL = 'https://vision.googleapis.com/v1/images:annotate';
-const GOOGLE_API_KEY = process.env.GOOGLE_API;
+
+function getGoogleApiKey() {
+  return process.env.GOOGLE_API || process.env.GOOGLE_API_KEY || '';
+}
 
 // Configuration
 const CONFIG = {
@@ -39,8 +42,10 @@ const CONFIG = {
  * @returns {Promise<Array>} - Array of face bounding boxes
  */
 async function detectFaces(imageBuffer) {
-  if (!GOOGLE_API_KEY) {
-    throw new Error('GOOGLE_API environment variable not set');
+  const googleApiKey = getGoogleApiKey();
+
+  if (!googleApiKey) {
+    throw new Error('GOOGLE_API or GOOGLE_API_KEY environment variable not set');
   }
 
   // Convert image to base64
@@ -65,7 +70,7 @@ async function detectFaces(imageBuffer) {
   try {
     console.log('[FACE BLUR] Calling Google Vision API...');
     const response = await axios.post(
-      `${VISION_API_URL}?key=${GOOGLE_API_KEY}`,
+      `${VISION_API_URL}?key=${googleApiKey}`,
       requestBody,
       {
         headers: {
@@ -91,6 +96,17 @@ async function detectFaces(imageBuffer) {
         if (v.y !== undefined) maxY = Math.max(maxY, v.y);
       });
 
+      if (
+        !Number.isFinite(minX) ||
+        !Number.isFinite(minY) ||
+        !Number.isFinite(maxX) ||
+        !Number.isFinite(maxY) ||
+        maxX <= minX ||
+        maxY <= minY
+      ) {
+        return null;
+      }
+
       // Add padding
       const width = maxX - minX;
       const height = maxY - minY;
@@ -103,7 +119,7 @@ async function detectFaces(imageBuffer) {
         width: Math.floor(width + 2 * paddingX),
         height: Math.floor(height + 2 * paddingY),
       };
-    });
+    }).filter(Boolean);
 
     return boundingBoxes;
   } catch (error) {
@@ -260,20 +276,26 @@ function extractFrames(inputPath, outputDir) {
 function reencodeVideo(inputPath, framesDir, outputPath) {
   return new Promise((resolve, reject) => {
     const framePattern = path.join(framesDir, 'frame-%04d.jpg');
+    const extractedFps = 1 / CONFIG.frameSampleRate;
 
-    ffmpeg(inputPath)
+    ffmpeg()
       .input(framePattern)
       .inputOptions([
-        '-framerate 1', // Frame rate matches extraction
+        `-framerate ${extractedFps}`, // Frame rate matches extraction
       ])
+      .input(inputPath)
       .outputOptions([
+        // Use processed frames for video and original input for audio (if present).
+        '-map 0:v:0',
+        '-map 1:a:0?',
         '-c:v libx264',
         '-preset medium',
         '-crf 23',
         '-pix_fmt yuv420p',
-        '-c:a aac', // Copy audio
+        '-c:a aac',
         '-shortest', // Match shortest duration
         '-r 30', // Output at 30 fps
+        '-movflags +faststart',
       ])
       .output(outputPath)
       .on('end', resolve)

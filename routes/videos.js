@@ -619,8 +619,10 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
   console.log('[BLUR] Processing video:', videoUrl.substring(0, 50) + '...');
 
   try {
+    const googleApiKey = process.env.GOOGLE_API || process.env.GOOGLE_API_KEY;
+
     // Check if Google API key is configured
-    if (!process.env.GOOGLE_API) {
+    if (!googleApiKey) {
       console.warn('[BLUR] GOOGLE_API not configured, returning original video');
       return res.json({
         success: true,
@@ -665,7 +667,11 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
     console.error('[BLUR] Error:', error.message);
 
     // If blur fails, return original URL as fallback
-    if (error.message.includes('GOOGLE_API') || error.message.includes('quota')) {
+    if (
+      error.message.includes('GOOGLE_API') ||
+      error.message.includes('GOOGLE_API_KEY') ||
+      error.message.includes('quota')
+    ) {
       console.warn('[BLUR] Google API error, using original video');
       return res.json({
         success: true,
