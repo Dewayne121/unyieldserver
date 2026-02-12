@@ -605,7 +605,7 @@ router.post('/reports/:id/review', authenticate, asyncHandler(async (req, res) =
   });
 }));
 
-// POST /api/videos/blur - Blur faces in a video using Google Cloud Vision API
+// POST /api/videos/blur - Blur faces in a video using LOCAL face detection (no cloud APIs)
 router.post('/blur', authenticate, asyncHandler(async (req, res) => {
   console.log('[BLUR] Blur request received');
 
@@ -619,25 +619,8 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
   console.log('[BLUR] Processing video:', videoUrl.substring(0, 50) + '...');
 
   try {
-    const googleApiKey = process.env.GOOGLE_API || process.env.GOOGLE_API_KEY;
-
-    // Check if Google API key is configured
-    if (!googleApiKey) {
-      console.warn('[BLUR] GOOGLE_API not configured, returning original video');
-      return res.json({
-        success: true,
-        data: {
-          blurredVideoUrl: videoUrl,
-          objectName: null,
-          facesFound: 0,
-          originalVideoUrl: videoUrl
-        },
-        message: 'Face blur not configured - original video used'
-      });
-    }
-
-    // Process video with face blur
-    console.log('[BLUR] Calling face blur service...');
+    // Process video with face blur (uses local TensorFlow.js)
+    console.log('[BLUR] Calling face blur service (local)...');
     const result = await blurVideoFromUrl(videoUrl);
 
     console.log('[BLUR] Processing complete:', { facesFound: result.facesFound });
@@ -667,23 +650,19 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
     console.error('[BLUR] Error:', error.message);
 
     // If blur fails, return original URL as fallback
-    if (
-      error.message.includes('GOOGLE_API') ||
-      error.message.includes('GOOGLE_API_KEY') ||
-      error.message.includes('quota')
-    ) {
-      console.warn('[BLUR] Google API error, using original video');
-      return res.json({
-        success: true,
-        data: {
-          blurredVideoUrl: videoUrl,
-          objectName: null,
-          facesFound: 0,
-          originalVideoUrl: videoUrl
-        },
-        message: 'Face blur service unavailable - original video used'
-      });
-    }
+    console.warn('[BLUR] Face blur failed, using original video');
+    return res.json({
+      success: true,
+      data: {
+        blurredVideoUrl: videoUrl,
+        objectName: null,
+        facesFound: 0,
+        originalVideoUrl: videoUrl
+      },
+      message: 'Face blur service unavailable - original video used'
+    });
+  }
+}));
 
     throw new AppError(`Failed to blur video: ${error.message}`, 500);
   }

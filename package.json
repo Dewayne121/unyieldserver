@@ -25,6 +25,8 @@
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@prisma/client": "^5.22.0",
+    "@tensorflow/tfjs-node": "^4.11.0",
+    "@vladmandic/face-api": "^1.7.12",
     "axios": "^1.6.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",

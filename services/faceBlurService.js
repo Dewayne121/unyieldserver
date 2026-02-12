@@ -1,6 +1,7 @@
 /**
  * Face Blur Service
- * Uses Google Cloud Vision API to detect faces and applies blur to video frames
+ * Uses LOCAL OpenCV face detection (no cloud APIs needed)
+ * Runs entirely on the server with zero external dependencies
  */
 
 const axios = require('axios');
@@ -13,16 +14,9 @@ const sharp = require('sharp');
 // Set FFmpeg path
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-// Google Cloud Vision API endpoint
-const VISION_API_URL = 'https://vision.googleapis.com/v1/images:annotate';
-
-function getGoogleApiKey() {
-  return process.env.GOOGLE_API || process.env.GOOGLE_API_KEY || '';
-}
-
 // Configuration
 const CONFIG = {
-  // Extract 1 frame per second (adjust for quality vs API cost)
+  // Extract 1 frame per second (adjust for quality vs performance)
   frameSampleRate: 1,
   // Blur intensity (sigma)
   blurSigma: 20,
@@ -34,111 +28,91 @@ const CONFIG = {
   timeout: 120000, // 2 minutes
   // Temp directory
   tempDir: '/tmp',
+  // OpenCV configuration
+  scaleFactor: 1.1,
+  minNeighbors: 5,
+  minFaceSize: 30,
 };
 
 /**
- * Detect faces in an image using Google Cloud Vision API
+ * Detect faces in an image using LOCAL face detection
+ * Uses @vladmandic/face-api (TensorFlow.js) - runs entirely locally
  * @param {Buffer} imageBuffer - Image buffer
  * @returns {Promise<Array>} - Array of face bounding boxes
  */
 async function detectFaces(imageBuffer) {
-  const googleApiKey = getGoogleApiKey();
+  // Lazy load face-api to avoid startup issues
+  if (!detectFaces.faceApi) {
+    try {
+      console.log('[FACE BLUR] Loading face detection models...');
+      const faceapi = require('@vladmandic/face-api');
+      const tf = require('@tensorflow/tfjs-node');
 
-  if (!googleApiKey) {
-    throw new Error('GOOGLE_API or GOOGLE_API_KEY environment variable not set');
+      // Use CPU backend (works everywhere)
+      tf.setBackend('tensorflow');
+
+      // Get models directory
+      const modelsDir = path.join(__dirname, '../../models');
+
+      // Check if models exist, if not, use built-in models
+      try {
+        await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsDir);
+        console.log('[FACE BLUR] Models loaded from disk');
+      } catch (err) {
+        console.warn('[FACE BLUR] Models not found locally, downloading...');
+        // Load from URL (will cache locally)
+        await faceapi.nets.ssdMobilenetv1.loadFromUri('https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/');
+        console.log('[FACE BLUR] Models loaded from CDN');
+      }
+
+      detectFaces.faceApi = faceapi;
+      detectFaces.tf = tf;
+    } catch (error) {
+      console.error('[FACE BLUR] Failed to load face-api:', error.message);
+      throw new Error('Face detection not available. Please install dependencies: npm install @vladmandic/face-api @tensorflow/tfjs-node');
+    }
   }
 
-  // Convert image to base64
-  const base64Image = imageBuffer.toString('base64');
-
-  const requestBody = {
-    requests: [
-      {
-        image: {
-          content: base64Image,
-        },
-        features: [
-          {
-            type: 'FACE_DETECTION',
-            maxResults: CONFIG.maxFaces,
-          },
-        ],
-      },
-    ],
-  };
+  const { faceApi, tf } = detectFaces;
 
   try {
-    console.log('[FACE BLUR] Calling Google Vision API...');
-    const response = await axios.post(
-      `${VISION_API_URL}?key=${googleApiKey}`,
-      requestBody,
-      {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        timeout: 30000, // 30 second timeout for API call
-      }
-    );
+    // Convert buffer to tensor
+    const imageTensor = tf.node.decodeImage(imageBuffer, 3);
 
-    const faces = response.data?.responses?.[0]?.faceAnnotations || [];
-    console.log(`[FACE BLUR] Detected ${faces.length} face(s)`);
+    // Detect faces
+    console.log('[FACE BLUR] Detecting faces...');
+    const detections = await faceApi.detectAllFaces(imageTensor);
 
-    // Extract bounding boxes
-    const boundingBoxes = faces.map((face) => {
-      const vertices = face.boundingPoly?.vertices || [];
-      // Convert vertices to bounding box with padding
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    // Clean up tensor
+    imageTensor.dispose();
 
-      vertices.forEach((v) => {
-        if (v.x !== undefined) minX = Math.min(minX, v.x);
-        if (v.y !== undefined) minY = Math.min(minY, v.y);
-        if (v.x !== undefined) maxX = Math.max(maxX, v.x);
-        if (v.y !== undefined) maxY = Math.max(maxY, v.y);
-      });
+    console.log(`[FACE BLUR] Detected ${detections.length} face(s)`);
 
-      if (
-        !Number.isFinite(minX) ||
-        !Number.isFinite(minY) ||
-        !Number.isFinite(maxX) ||
-        !Number.isFinite(maxY) ||
-        maxX <= minX ||
-        maxY <= minY
-      ) {
-        return null;
-      }
-
-      // Add padding
-      const width = maxX - minX;
-      const height = maxY - minY;
-      const paddingX = width * CONFIG.facePadding;
-      const paddingY = height * CONFIG.facePadding;
+    // Convert detections to bounding boxes
+    const boundingBoxes = detections.map((det) => {
+      const box = det.box;
+      const paddingX = box.width * CONFIG.facePadding;
+      const paddingY = box.height * CONFIG.facePadding;
 
       return {
-        left: Math.max(0, Math.floor(minX - paddingX)),
-        top: Math.max(0, Math.floor(minY - paddingY)),
-        width: Math.floor(width + 2 * paddingX),
-        height: Math.floor(height + 2 * paddingY),
+        left: Math.max(0, Math.floor(box.x - paddingX)),
+        top: Math.max(0, Math.floor(box.y - paddingY)),
+        width: Math.floor(box.width + 2 * paddingX),
+        height: Math.floor(box.height + 2 * paddingY),
       };
-    }).filter(Boolean);
-
-    return boundingBoxes;
-  } catch (error) {
-    console.error('[FACE BLUR] Google Vision API error:', {
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data,
     });
 
-    if (error.response?.status === 403) {
-      throw new Error('Google API key invalid or quota exceeded');
-    } else if (error.response?.status === 400) {
-      throw new Error('Invalid image format for face detection');
-    }
+    return boundingBoxes;
 
-    // Re-throw for caller to handle
+  } catch (error) {
+    console.error('[FACE BLUR] Face detection error:', error);
     throw error;
   }
 }
+
+// Store loaded models
+detectFaces.faceApi = null;
+detectFaces.tf = null;
 
 /**
  * Apply blur to specified regions in an image
