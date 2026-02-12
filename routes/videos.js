@@ -6,6 +6,7 @@ const prisma = require('../src/prisma');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { uploadVideo, deleteVideo } = require('../services/objectStorage');
+const { blurVideoFromUrl } = require('../services/faceBlurService');
 
 const router = express.Router();
 
@@ -604,7 +605,7 @@ router.post('/reports/:id/review', authenticate, asyncHandler(async (req, res) =
   });
 }));
 
-// POST /api/videos/blur - Blur faces in a video using Python microservice
+// POST /api/videos/blur - Blur faces in a video using Google Cloud Vision API
 router.post('/blur', authenticate, asyncHandler(async (req, res) => {
   console.log('[BLUR] Blur request received');
 
@@ -618,50 +619,34 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
   console.log('[BLUR] Processing video:', videoUrl.substring(0, 50) + '...');
 
   try {
-    // Get the Python service URL from environment or use localhost
-    const blurServiceUrl = process.env.BLUR_SERVICE_URL || 'http://localhost:5001';
-
-    console.log('[BLUR] Calling Python microservice at:', blurServiceUrl);
-
-    // Call the Python microservice
-    const axios = require('axios');
-    const response = await axios.post(`${blurServiceUrl}/blur`, {
-      videoUrl: videoUrl
-    }, {
-      timeout: 300000, // 5 minute timeout for video processing
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-
-    console.log('[BLUR] Python service response:', response.data);
-
-    if (!response.data.success) {
-      throw new AppError(response.data.error || 'Failed to blur video', 500);
+    // Check if Google API key is configured
+    if (!process.env.GOOGLE_API) {
+      console.warn('[BLUR] GOOGLE_API not configured, returning original video');
+      return res.json({
+        success: true,
+        data: {
+          blurredVideoUrl: videoUrl,
+          objectName: null,
+          facesFound: 0,
+          originalVideoUrl: videoUrl
+        },
+        message: 'Face blur not configured - original video used'
+      });
     }
 
-    // Read the processed video file
-    const outputPath = response.data.outputPath;
+    // Process video with face blur
+    console.log('[BLUR] Calling face blur service...');
+    const result = await blurVideoFromUrl(videoUrl);
 
-    if (!fs.existsSync(outputPath)) {
-      throw new AppError('Blurred video file not found', 500);
-    }
+    console.log('[BLUR] Processing complete:', { facesFound: result.facesFound });
 
     // Upload the blurred video to Oracle Cloud Object Storage
     console.log('[BLUR] Uploading blurred video to storage...');
-    const fileBuffer = fs.readFileSync(outputPath);
     const uploadResult = await uploadVideo(
-      fileBuffer,
+      result.buffer,
       `blurred_${Date.now()}.mp4`,
       'video/mp4'
     );
-
-    // Clean up the temp file
-    try {
-      fs.unlinkSync(outputPath);
-    } catch (err) {
-      console.warn('[BLUR] Could not delete temp file:', err.message);
-    }
 
     console.log('[BLUR] Blurred video uploaded:', uploadResult.publicUrl);
 
@@ -670,17 +655,28 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
       data: {
         blurredVideoUrl: uploadResult.publicUrl,
         objectName: uploadResult.objectName,
-        facesFound: response.data.facesFound,
+        facesFound: result.facesFound,
         originalVideoUrl: videoUrl
       },
-      message: `Blurred ${response.data.facesFound} faces in video`
+      message: `Blurred ${result.facesFound} faces in video`
     });
 
   } catch (error) {
     console.error('[BLUR] Error:', error.message);
 
-    if (error.code === 'ECONNREFUSED') {
-      throw new AppError('Face blur service is not available. Please try again later.', 503);
+    // If blur fails, return original URL as fallback
+    if (error.message.includes('GOOGLE_API') || error.message.includes('quota')) {
+      console.warn('[BLUR] Google API error, using original video');
+      return res.json({
+        success: true,
+        data: {
+          blurredVideoUrl: videoUrl,
+          objectName: null,
+          facesFound: 0,
+          originalVideoUrl: videoUrl
+        },
+        message: 'Face blur service unavailable - original video used'
+      });
     }
 
     throw new AppError(`Failed to blur video: ${error.message}`, 500);
