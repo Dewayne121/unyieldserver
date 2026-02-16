@@ -17,6 +17,7 @@ const generateTestToken = (userId, email) => {
 // Mock data
 let testUser, testUser2, adminUser;
 let testToken, testToken2, adminToken;
+let signupInviteCode;
 
 describe('UNYIELD API Tests', () => {
   // Import modules after setup has configured env vars
@@ -62,6 +63,13 @@ describe('UNYIELD API Tests', () => {
       },
     });
 
+    signupInviteCode = await prisma.inviteCode.create({
+      data: {
+        code: 'INVITE01',
+        createdById: testUser.id,
+      },
+    });
+
     // Generate tokens
     testToken = generateTestToken(testUser.id, testUser.email);
     testToken2 = generateTestToken(testUser2.id, testUser2.email);
@@ -98,13 +106,52 @@ describe('UNYIELD API Tests', () => {
           email: 'newuser@test.com',
           password: 'password123',
           username: 'newuser',
-          name: 'New User',
+          inviteCode: signupInviteCode.code,
         });
 
       expect(response.status).toBe(201);
       expect(response.body.success).toBe(true);
-      expect(response.body.data.email).toBe('newuser@test.com');
+      expect(response.body.data.user.email).toBe('newuser@test.com');
       expect(response.body.data.token).toBeDefined();
+    });
+
+    test('POST /api/auth/register should fail without invite code', async () => {
+      const response = await request(app)
+        .post('/api/auth/register')
+        .send({
+          email: 'missinginvite@test.com',
+          password: 'password123',
+          username: 'missinginvite',
+        });
+
+      expect(response.status).toBe(400);
+    });
+
+    test('POST /api/auth/invites should enforce a maximum of 3 codes per user', async () => {
+      const codeResponses = [];
+      for (let i = 0; i < 3; i++) {
+        // Generate one at a time to match expected user behavior.
+        // Concurrent generation is still guarded by backend constraints.
+        // eslint-disable-next-line no-await-in-loop
+        const response = await request(app)
+          .post('/api/auth/invites')
+          .set('Authorization', `Bearer ${testToken2}`)
+          .send({});
+        codeResponses.push(response);
+      }
+
+      codeResponses.forEach((response) => {
+        expect(response.status).toBe(201);
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.inviteCode.code).toHaveLength(8);
+      });
+
+      const fourthResponse = await request(app)
+        .post('/api/auth/invites')
+        .set('Authorization', `Bearer ${testToken2}`)
+        .send({});
+
+      expect(fourthResponse.status).toBe(400);
     });
 
     test('POST /api/auth/login should authenticate user', async () => {

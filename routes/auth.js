@@ -5,6 +5,33 @@ const { generateToken, authenticate } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 
 const router = express.Router();
+const MAX_INVITE_CODES_PER_USER = 3;
+const INVITE_CODE_LENGTH = 8;
+const INVITE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+const normalizeInviteCode = (value = '') => value.trim().toUpperCase();
+
+const generateInviteCodeValue = () => {
+  let code = '';
+  for (let i = 0; i < INVITE_CODE_LENGTH; i++) {
+    const index = Math.floor(Math.random() * INVITE_CODE_ALPHABET.length);
+    code += INVITE_CODE_ALPHABET[index];
+  }
+  return code;
+};
+
+const formatInviteCodeResponse = (inviteCode) => ({
+  id: inviteCode.id,
+  code: inviteCode.code,
+  isUsed: inviteCode.isUsed,
+  usedAt: inviteCode.usedAt,
+  createdAt: inviteCode.createdAt,
+  usedBy: inviteCode.usedBy ? {
+    id: inviteCode.usedBy.id,
+    username: inviteCode.usedBy.username,
+    name: inviteCode.usedBy.name,
+  } : null,
+});
 
 // Helper to format user response
 const formatUserResponse = (user) => ({
@@ -35,10 +62,10 @@ const formatUserResponse = (user) => ({
 
 // POST /api/auth/register - Register new user
 router.post('/register', asyncHandler(async (req, res) => {
-  const { email, password, username } = req.body;
+  const { email, password, username, inviteCode } = req.body;
 
-  if (!email || !password || !username) {
-    throw new AppError('Email, password, and username are required', 400);
+  if (!email || !password || !username || !inviteCode) {
+    throw new AppError('Email, password, username, and invite code are required', 400);
   }
 
   if (password.length < 6) {
@@ -52,6 +79,11 @@ router.post('/register', asyncHandler(async (req, res) => {
   // Check if username is valid (alphanumeric and underscores only)
   if (!/^[a-zA-Z0-9_]+$/.test(username)) {
     throw new AppError('Username can only contain letters, numbers, and underscores', 400);
+  }
+
+  const normalizedInviteCode = normalizeInviteCode(inviteCode);
+  if (normalizedInviteCode.length < INVITE_CODE_LENGTH) {
+    throw new AppError('Invalid invite code format', 400);
   }
 
   // Check if email already exists
@@ -73,14 +105,48 @@ router.post('/register', asyncHandler(async (req, res) => {
   // Hash password manually (replaces Mongoose pre-save hook)
   const hashedPassword = await hashPassword(password);
 
-  const user = await prisma.user.create({
-    data: {
-      email: email.toLowerCase(),
-      password: hashedPassword,
-      username: username.toLowerCase(),
-      name: username, // Default name to username, can be changed in onboarding
-      provider: 'email',
-    },
+  const user = await prisma.$transaction(async (tx) => {
+    const invite = await tx.inviteCode.findUnique({
+      where: { code: normalizedInviteCode }
+    });
+
+    if (!invite) {
+      throw new AppError('Invalid invite code', 400);
+    }
+
+    if (invite.isUsed || invite.usedById) {
+      throw new AppError('Invite code has already been used', 409);
+    }
+
+    const createdUser = await tx.user.create({
+      data: {
+        email: email.toLowerCase(),
+        password: hashedPassword,
+        username: username.toLowerCase(),
+        name: username, // Default name to username, can be changed in onboarding
+        provider: 'email',
+        invitedById: invite.createdById,
+      },
+    });
+
+    const consumeInviteResult = await tx.inviteCode.updateMany({
+      where: {
+        id: invite.id,
+        isUsed: false,
+        usedById: null,
+      },
+      data: {
+        isUsed: true,
+        usedById: createdUser.id,
+        usedAt: new Date(),
+      },
+    });
+
+    if (consumeInviteResult.count !== 1) {
+      throw new AppError('Invite code has already been used', 409);
+    }
+
+    return createdUser;
   });
 
   console.log(`New user registered: ${user.username} (${user.email})`);
@@ -92,6 +158,87 @@ router.post('/register', asyncHandler(async (req, res) => {
     data: {
       user: formatUserResponse(user),
       token,
+    },
+  });
+}));
+
+// GET /api/auth/invites - Get current user's invite codes
+router.get('/invites', authenticate, asyncHandler(async (req, res) => {
+  const inviteCodes = await prisma.inviteCode.findMany({
+    where: { createdById: req.user.id },
+    include: {
+      usedBy: {
+        select: {
+          id: true,
+          username: true,
+          name: true,
+        },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  res.json({
+    success: true,
+    data: {
+      inviteCodes: inviteCodes.map(formatInviteCodeResponse),
+      maxInviteCodes: MAX_INVITE_CODES_PER_USER,
+      remainingInviteCodes: Math.max(0, MAX_INVITE_CODES_PER_USER - inviteCodes.length),
+    },
+  });
+}));
+
+// POST /api/auth/invites - Generate a new invite code (max 3 per user)
+router.post('/invites', authenticate, asyncHandler(async (req, res) => {
+  const generatedInviteCode = await prisma.$transaction(async (tx) => {
+    const existingInviteCount = await tx.inviteCode.count({
+      where: { createdById: req.user.id },
+    });
+
+    if (existingInviteCount >= MAX_INVITE_CODES_PER_USER) {
+      throw new AppError(`Invite code limit reached (${MAX_INVITE_CODES_PER_USER} maximum)`, 400);
+    }
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const code = generateInviteCodeValue();
+      try {
+        return await tx.inviteCode.create({
+          data: {
+            code,
+            createdById: req.user.id,
+          },
+          include: {
+            usedBy: {
+              select: {
+                id: true,
+                username: true,
+                name: true,
+              },
+            },
+          },
+        });
+      } catch (error) {
+        // Prisma unique constraint error - retry with a new generated code
+        if (error.code === 'P2002') {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new AppError('Failed to generate a unique invite code. Please try again.', 500);
+  });
+
+  const totalCodes = await prisma.inviteCode.count({
+    where: { createdById: req.user.id },
+  });
+
+  res.status(201).json({
+    success: true,
+    data: {
+      inviteCode: formatInviteCodeResponse(generatedInviteCode),
+      maxInviteCodes: MAX_INVITE_CODES_PER_USER,
+      remainingInviteCodes: Math.max(0, MAX_INVITE_CODES_PER_USER - totalCodes),
     },
   });
 }));

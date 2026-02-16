@@ -199,6 +199,13 @@ model User {
   // Tracking for weekly digest
   lastRankDigestSentAt   DateTime?
 
+  // Invitation system
+  invitedById            String?
+  invitedBy              User?         @relation("UserInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedUsers           User[]        @relation("UserInvitedBy")
+  createdInviteCodes     InviteCode[]  @relation("UserCreatedInvites")
+  redeemedInviteCode     InviteCode?   @relation("UserRedeemedInvite")
+
   // Relations - User as owner
   workouts             Workout[]
   videoSubmissions     VideoSubmission[]     @relation("UserVideos")
@@ -217,10 +224,27 @@ model User {
   verifiedSubmissions ChallengeSubmission[] @relation("VerifiedChallengeSubmissions")
 
   @@index([region])
+  @@index([invitedById])
   @@index([totalPoints(sort: Desc)])
   @@index([weeklyPoints(sort: Desc)])
   @@index([weightClass, strengthRatio(sort: Desc)])
   @@index([region, weightClass, strengthRatio(sort: Desc)])
+}
+
+model InviteCode {
+  id          String   @id @default(cuid())
+  code        String   @unique @db.VarChar(16)
+  createdById String
+  createdBy   User     @relation("UserCreatedInvites", fields: [createdById], references: [id], onDelete: Cascade)
+  usedById    String?  @unique
+  usedBy      User?    @relation("UserRedeemedInvite", fields: [usedById], references: [id], onDelete: SetNull)
+  isUsed      Boolean  @default(false)
+  usedAt      DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([createdById, createdAt(sort: Desc)])
+  @@index([isUsed])
 }
 
 model Workout {
