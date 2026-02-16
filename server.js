@@ -61,6 +61,29 @@ if (process.env.NODE_ENV === 'production' && allowedCorsOrigins.length === 0) {
   console.warn('[SECURITY WARNING] CORS_ORIGINS is empty in production. Browser origins will be blocked by default.');
 }
 
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const originPatternToRegex = (pattern) => {
+  if (!pattern.includes('*')) {
+    return null;
+  }
+  const source = `^${escapeRegex(pattern).replace(/\\\*/g, '.*')}$`;
+  return new RegExp(source);
+};
+
+const corsOriginMatchers = allowedCorsOrigins.map((pattern) => ({
+  pattern,
+  regex: originPatternToRegex(pattern),
+}));
+
+const isOriginAllowed = (origin) => {
+  return corsOriginMatchers.some(({ pattern, regex }) => {
+    if (regex) {
+      return regex.test(origin);
+    }
+    return pattern === origin;
+  });
+};
+
 // Security middleware (but allow video endpoints)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -80,7 +103,7 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    if (allowAllCorsInDev || allowedCorsOrigins.includes(origin)) {
+    if (allowAllCorsInDev || isOriginAllowed(origin)) {
       return callback(null, true);
     }
 
