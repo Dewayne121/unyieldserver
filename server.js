@@ -98,10 +98,22 @@ app.options('*', cors(corsOptions));
 // Enforce HTTPS when behind a proxy (Railway sets x-forwarded-proto)
 if (process.env.NODE_ENV === 'production' && process.env.ENFORCE_HTTPS !== 'false') {
   app.use((req, res, next) => {
+    // Always allow platform health checks
+    if (req.path === '/health' || req.path === '/api/health') {
+      return next();
+    }
+
     const forwardedProto = req.headers['x-forwarded-proto'];
     const primaryForwardedProto = typeof forwardedProto === 'string'
       ? forwardedProto.split(',')[0].trim()
       : '';
+
+    // If proxy protocol info is unavailable (e.g., internal platform checks),
+    // don't block the request at app level.
+    if (!primaryForwardedProto) {
+      return next();
+    }
+
     if (req.secure || primaryForwardedProto === 'https') {
       return next();
     }
