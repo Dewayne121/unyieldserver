@@ -664,8 +664,4 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
   }
 }));
 
-    throw new AppError(`Failed to blur video: ${error.message}`, 500);
-  }
-}));
-
 module.exports = router;
