@@ -154,6 +154,21 @@ describe('UNYIELD API Tests', () => {
       expect(fourthResponse.status).toBe(400);
     });
 
+    test('POST /api/auth/invites should allow admins to generate unlimited codes', async () => {
+      for (let i = 0; i < 5; i++) {
+        // eslint-disable-next-line no-await-in-loop
+        const response = await request(app)
+          .post('/api/auth/invites')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({});
+
+        expect(response.status).toBe(201);
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.inviteCode.code).toHaveLength(8);
+        expect(response.body.data.isUnlimitedInvites).toBe(true);
+      }
+    });
+
     test('POST /api/auth/login should authenticate user', async () => {
       const response = await request(app)
         .post('/api/auth/login')

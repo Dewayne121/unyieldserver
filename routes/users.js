@@ -165,7 +165,7 @@ router.patch('/password', authenticate, asyncHandler(async (req, res) => {
   }
 
   // Verify current password
-  const { comparePassword, hashPassword } = require('../services/userService');
+  const { comparePassword, hashPassword, validatePasswordStrength } = require('../services/userService');
   const isPasswordValid = await comparePassword(currentPassword, user.password);
 
   if (!isPasswordValid) {
@@ -173,8 +173,9 @@ router.patch('/password', authenticate, asyncHandler(async (req, res) => {
   }
 
   // Validate new password
-  if (newPassword.length < 6) {
-    throw new AppError('New password must be at least 6 characters', 400);
+  const passwordValidation = validatePasswordStrength(newPassword);
+  if (!passwordValidation.valid) {
+    throw new AppError(passwordValidation.message, 400);
   }
 
   // Check if new password is same as current

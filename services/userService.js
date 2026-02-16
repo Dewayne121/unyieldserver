@@ -5,6 +5,7 @@
  */
 
 const bcrypt = require('bcryptjs');
+const PASSWORD_MIN_LENGTH = Number.parseInt(process.env.PASSWORD_MIN_LENGTH || '10', 10);
 
 // Constants exported from original User model
 const REGIONS = [
@@ -49,6 +50,37 @@ const hashPassword = async (password) => {
  */
 const comparePassword = async (candidatePassword, hashedPassword) => {
   return bcrypt.compare(candidatePassword, hashedPassword);
+};
+
+/**
+ * Validate password strength using a reasonable baseline policy:
+ * - Minimum length
+ * - At least one uppercase letter
+ * - At least one lowercase letter
+ * - At least one number
+ * - At least one symbol
+ */
+const validatePasswordStrength = (password) => {
+  if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
+    return {
+      valid: false,
+      message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
+    };
+  }
+
+  const hasUpper = /[A-Z]/.test(password);
+  const hasLower = /[a-z]/.test(password);
+  const hasNumber = /\d/.test(password);
+  const hasSymbol = /[^A-Za-z0-9]/.test(password);
+
+  if (!hasUpper || !hasLower || !hasNumber || !hasSymbol) {
+    return {
+      valid: false,
+      message: 'Password must include uppercase, lowercase, number, and symbol',
+    };
+  }
+
+  return { valid: true, message: 'Password is valid' };
 };
 
 /**
@@ -119,4 +151,6 @@ module.exports = {
   isValidFitnessLevel,
   isValidAccolade,
   isAdmin,
+  validatePasswordStrength,
+  PASSWORD_MIN_LENGTH,
 };

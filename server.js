@@ -2,10 +2,18 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const path = require('path');
 require('dotenv').config();
 
 const { connectDB, disconnectDB } = require('./config/database');
+const MIN_JWT_SECRET_LENGTH = 32;
+
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < MIN_JWT_SECRET_LENGTH) {
+  const message = `JWT_SECRET must be set and at least ${MIN_JWT_SECRET_LENGTH} characters long`;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(message);
+  }
+  console.warn(`[SECURITY WARNING] ${message}`);
+}
 
 // Connect to PostgreSQL
 connectDB();
@@ -36,19 +44,73 @@ const { errorHandler } = require('./middleware/errorHandler');
 const { rateLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+const parseCorsOrigins = () => {
+  const raw = process.env.CORS_ORIGINS || '';
+  return raw
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+};
+
+const allowedCorsOrigins = parseCorsOrigins();
+const allowAllCorsInDev = process.env.NODE_ENV !== 'production' && allowedCorsOrigins.length === 0;
+if (process.env.NODE_ENV === 'production' && allowedCorsOrigins.length === 0) {
+  console.warn('[SECURITY WARNING] CORS_ORIGINS is empty in production. Browser origins will be blocked by default.');
+}
 
 // Security middleware (but allow video endpoints)
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  hsts: process.env.NODE_ENV === 'production' ? {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  } : false,
+  referrerPolicy: { policy: 'no-referrer' },
 }));
 
 // CORS configuration
-app.use(cors({
-  origin: '*', // In production, specify allowed origins
+const corsOptions = {
+  origin(origin, callback) {
+    // Native mobile apps and server-to-server calls may not include Origin.
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (allowAllCorsInDev || allowedCorsOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(null, false);
+  },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-}));
+  credentials: false,
+  maxAge: 86400,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+// Enforce HTTPS when behind a proxy (Railway sets x-forwarded-proto)
+if (process.env.NODE_ENV === 'production' && process.env.ENFORCE_HTTPS !== 'false') {
+  app.use((req, res, next) => {
+    const forwardedProto = req.headers['x-forwarded-proto'];
+    const primaryForwardedProto = typeof forwardedProto === 'string'
+      ? forwardedProto.split(',')[0].trim()
+      : '';
+    if (req.secure || primaryForwardedProto === 'https') {
+      return next();
+    }
+    return res.status(426).json({
+      success: false,
+      error: 'HTTPS is required',
+    });
+  });
+}
 
 // Request parsing
 // Only parse JSON for application/json content type, not for multipart uploads

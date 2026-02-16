@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { AppError } = require('./errorHandler');
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h';
+const JWT_ALGORITHM = 'HS256';
 
 // Verify JWT token
 const authenticate = (req, res, next) => {
@@ -12,7 +14,9 @@ const authenticate = (req, res, next) => {
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+      algorithms: [JWT_ALGORITHM],
+    });
     req.user = decoded;
     next();
   } catch (error) {
@@ -35,7 +39,9 @@ const optionalAuth = (req, res, next) => {
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+      algorithms: [JWT_ALGORITHM],
+    });
     req.user = decoded;
   } catch (error) {
     req.user = null;
@@ -53,7 +59,10 @@ const generateToken = (user) => {
       provider: user.provider,
     },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    {
+      expiresIn: JWT_EXPIRES_IN,
+      algorithm: JWT_ALGORITHM,
+    }
   );
 };
 

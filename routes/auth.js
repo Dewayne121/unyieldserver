@@ -1,8 +1,9 @@
 const express = require('express');
 const prisma = require('../src/prisma');
-const { hashPassword, comparePassword } = require('../services/userService');
+const { hashPassword, comparePassword, validatePasswordStrength } = require('../services/userService');
 const { generateToken, authenticate } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
+const { authRateLimiter, inviteRateLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 const MAX_INVITE_CODES_PER_USER = 3;
@@ -19,6 +20,14 @@ const generateInviteCodeValue = () => {
   }
   return code;
 };
+
+const isUserAdmin = (user) => Array.isArray(user?.accolades) && user.accolades.includes('admin');
+
+const getInvitePolicy = (isUnlimitedInvites, totalCodes) => ({
+  maxInviteCodes: isUnlimitedInvites ? null : MAX_INVITE_CODES_PER_USER,
+  remainingInviteCodes: isUnlimitedInvites ? null : Math.max(0, MAX_INVITE_CODES_PER_USER - totalCodes),
+  isUnlimitedInvites,
+});
 
 const formatInviteCodeResponse = (inviteCode) => ({
   id: inviteCode.id,
@@ -61,15 +70,16 @@ const formatUserResponse = (user) => ({
 });
 
 // POST /api/auth/register - Register new user
-router.post('/register', asyncHandler(async (req, res) => {
+router.post('/register', authRateLimiter, asyncHandler(async (req, res) => {
   const { email, password, username, inviteCode } = req.body;
 
   if (!email || !password || !username || !inviteCode) {
     throw new AppError('Email, password, username, and invite code are required', 400);
   }
 
-  if (password.length < 6) {
-    throw new AppError('Password must be at least 6 characters', 400);
+  const passwordValidation = validatePasswordStrength(password);
+  if (!passwordValidation.valid) {
+    throw new AppError(passwordValidation.message, 400);
   }
 
   if (username.length < 3 || username.length > 20) {
@@ -164,6 +174,17 @@ router.post('/register', asyncHandler(async (req, res) => {
 
 // GET /api/auth/invites - Get current user's invite codes
 router.get('/invites', authenticate, asyncHandler(async (req, res) => {
+  const requester = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    select: { accolades: true },
+  });
+
+  if (!requester) {
+    throw new AppError('User not found', 404);
+  }
+
+  const isUnlimitedInvites = isUserAdmin(requester);
+
   const inviteCodes = await prisma.inviteCode.findMany({
     where: { createdById: req.user.id },
     include: {
@@ -182,21 +203,33 @@ router.get('/invites', authenticate, asyncHandler(async (req, res) => {
     success: true,
     data: {
       inviteCodes: inviteCodes.map(formatInviteCodeResponse),
-      maxInviteCodes: MAX_INVITE_CODES_PER_USER,
-      remainingInviteCodes: Math.max(0, MAX_INVITE_CODES_PER_USER - inviteCodes.length),
+      ...getInvitePolicy(isUnlimitedInvites, inviteCodes.length),
     },
   });
 }));
 
-// POST /api/auth/invites - Generate a new invite code (max 3 per user)
-router.post('/invites', authenticate, asyncHandler(async (req, res) => {
-  const generatedInviteCode = await prisma.$transaction(async (tx) => {
-    const existingInviteCount = await tx.inviteCode.count({
-      where: { createdById: req.user.id },
-    });
+// POST /api/auth/invites - Generate a new invite code (max 3 per user, unlimited for admins)
+router.post('/invites', authenticate, inviteRateLimiter, asyncHandler(async (req, res) => {
+  const requester = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    select: { accolades: true },
+  });
 
-    if (existingInviteCount >= MAX_INVITE_CODES_PER_USER) {
-      throw new AppError(`Invite code limit reached (${MAX_INVITE_CODES_PER_USER} maximum)`, 400);
+  if (!requester) {
+    throw new AppError('User not found', 404);
+  }
+
+  const isUnlimitedInvites = isUserAdmin(requester);
+
+  const generatedInviteCode = await prisma.$transaction(async (tx) => {
+    if (!isUnlimitedInvites) {
+      const existingInviteCount = await tx.inviteCode.count({
+        where: { createdById: req.user.id },
+      });
+
+      if (existingInviteCount >= MAX_INVITE_CODES_PER_USER) {
+        throw new AppError(`Invite code limit reached (${MAX_INVITE_CODES_PER_USER} maximum)`, 400);
+      }
     }
 
     for (let attempt = 0; attempt < 10; attempt++) {
@@ -237,14 +270,13 @@ router.post('/invites', authenticate, asyncHandler(async (req, res) => {
     success: true,
     data: {
       inviteCode: formatInviteCodeResponse(generatedInviteCode),
-      maxInviteCodes: MAX_INVITE_CODES_PER_USER,
-      remainingInviteCodes: Math.max(0, MAX_INVITE_CODES_PER_USER - totalCodes),
+      ...getInvitePolicy(isUnlimitedInvites, totalCodes),
     },
   });
 }));
 
 // POST /api/auth/login - Login user
-router.post('/login', asyncHandler(async (req, res) => {
+router.post('/login', authRateLimiter, asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
