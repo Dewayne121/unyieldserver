@@ -76,13 +76,17 @@ const corsOriginMatchers = allowedCorsOrigins.map((pattern) => ({
 }));
 
 const isOriginAllowed = (origin) => {
-  // Always allow Expo development URLs (for React Native development)
-  // Supports both exp:// and https:// protocols used by Expo
-  if (origin && origin.match(/^(https?|exp):\/\/[a-z0-9-]+\.[a-z0-9-]+\.exp\.direct$/i)) {
-    return true;
+  // Allow Expo development URLs when explicitly enabled via ALLOW_EXPO_DEV=true
+  // This is opt-in for security - add to Railway environment variables to enable
+  if (process.env.ALLOW_EXPO_DEV === 'true') {
+    // Expo tunnel URLs (exp:// and https:// protocols)
+    if (origin && origin.match(/^(https?|exp):\/\/[a-z0-9-]+\.[a-z0-9-]+\.exp\.direct$/i)) {
+      return true;
+    }
   }
-  // Allow localhost for local development
-  if (origin && origin.match(/^https?:\/\/localhost(:\d+)?$/i)) {
+
+  // Always allow localhost in non-production for local web development
+  if (process.env.NODE_ENV !== 'production' && origin && origin.match(/^https?:\/\/localhost(:\d+)?$/i)) {
     return true;
   }
 
