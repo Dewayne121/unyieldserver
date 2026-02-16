@@ -77,7 +77,8 @@ const corsOriginMatchers = allowedCorsOrigins.map((pattern) => ({
 
 const isOriginAllowed = (origin) => {
   // Always allow Expo development URLs (for React Native development)
-  if (origin && origin.match(/^https?:\/\/[a-z0-9-]+\.[a-z0-9-]+\.exp\.direct$/i)) {
+  // Supports both exp:// and https:// protocols used by Expo
+  if (origin && origin.match(/^(https?|exp):\/\/[a-z0-9-]+\.[a-z0-9-]+\.exp\.direct$/i)) {
     return true;
   }
   // Allow localhost for local development
