@@ -616,14 +616,27 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
   try {
     // Call the faceblurapi service
     const FACE_BLUR_API_URL = process.env.FACE_BLUR_API_URL || 'https://unyield-faceblur-api-production.up.railway.app';
+    const blurTimeoutMs = Number(process.env.FACE_BLUR_TIMEOUT_MS || 360000);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), blurTimeoutMs);
+    let response;
+    try {
+      response = await fetch(`${FACE_BLUR_API_URL}/blur`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videoUrl }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
-    const response = await fetch(`${FACE_BLUR_API_URL}/blur`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoUrl }),
-    });
-
-    const data = await response.json();
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      throw new AppError(`Face blur service returned invalid JSON (${response.status})`, 502);
+    }
 
     if (!response.ok || !data.success) {
       throw new AppError(data.error || 'Face blur service failed', 502);
@@ -634,26 +647,21 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
       data: {
         blurredVideoUrl: data.data.blurredVideoUrl,
         originalVideoUrl: data.data.originalVideoUrl,
-        facesFound: data.data.facesDetected || 0,
+        objectName: data.data.blurredObjectName || null,
+        originalObjectName: data.data.originalObjectName || null,
+        facesFound: data.data.facesBlurred || data.data.facesDetected || 0,
         facesDetected: data.data.facesDetected || 0,
+        facesBlurred: data.data.facesBlurred || data.data.facesDetected || 0,
         framesProcessed: data.data.framesProcessed || 0,
+        privacyFallbackApplied: !!data.data.privacyFallbackApplied,
+        temporalPropagationApplied: !!data.data.temporalPropagationApplied,
+        propagatedFaces: data.data.propagatedFaces || 0,
       }
     });
 
   } catch (error) {
     console.error('[BLUR] Error:', error.message);
-
-    // Fallback to original video if blur service is down
-    return res.json({
-      success: true,
-      data: {
-        blurredVideoUrl: videoUrl,
-        originalVideoUrl: videoUrl,
-        facesFound: 0,
-        facesDetected: 0,
-      },
-      message: 'Face blur service unavailable - original video used'
-    });
+    throw new AppError(error.message || 'Face blur service unavailable', 502);
   }
 }));
 
