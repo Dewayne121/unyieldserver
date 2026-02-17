@@ -280,6 +280,7 @@ model VideoSubmission {
   weight          Float       @default(0)
   duration        Int?
   videoUrl        String?
+  originalVideoUrl String?    // Original unblurred video (admin only)
   thumbnailUrl    String?
   status          VideoStatus @default(pending)
   verifiedById    String?
@@ -359,6 +360,7 @@ model ChallengeSubmission {
   duration        Int         @default(0)
   videoUri        String?
   videoUrl        String?
+  originalVideoUrl String?    // Original unblurred video (admin only)
   serverVideoId   String?
   value           Int
   status          VideoStatus @default(pending)

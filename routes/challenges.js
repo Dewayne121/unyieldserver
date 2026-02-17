@@ -368,7 +368,7 @@ router.get('/:id/leaderboard', asyncHandler(async (req, res) => {
 
 // POST /api/challenges/:id/submit - Submit a challenge entry
 router.post('/:id/submit', authenticate, asyncHandler(async (req, res) => {
-  const { exercise, reps, weight, duration, videoUri, videoUrl, serverVideoId, notes = '' } = req.body;
+  const { exercise, reps, weight, duration, videoUri, videoUrl, originalVideoUrl, serverVideoId, notes = '' } = req.body;
 
   const challenge = await prisma.challenge.findUnique({
     where: { id: req.params.id }
@@ -452,6 +452,7 @@ router.post('/:id/submit', authenticate, asyncHandler(async (req, res) => {
       duration: duration || 0,
       videoUri,
       videoUrl,
+      originalVideoUrl, // Store original unblurred video for admin view
       serverVideoId,
       value,
       notes,

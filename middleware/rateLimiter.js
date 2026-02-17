@@ -55,11 +55,11 @@ const createRateLimiter = ({
 };
 
 const globalWindowMs = parseNumber(process.env.RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000);
-const globalMaxRequests = parseNumber(process.env.RATE_LIMIT_MAX_REQUESTS, 120);
+const globalMaxRequests = parseNumber(process.env.RATE_LIMIT_MAX_REQUESTS, 500);
 const authWindowMs = parseNumber(process.env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000);
-const authMaxRequests = parseNumber(process.env.AUTH_RATE_LIMIT_MAX_REQUESTS, 12);
+const authMaxRequests = parseNumber(process.env.AUTH_RATE_LIMIT_MAX_REQUESTS, 30);
 const inviteWindowMs = parseNumber(process.env.INVITE_RATE_LIMIT_WINDOW_MS, 60 * 60 * 1000);
-const inviteMaxRequests = parseNumber(process.env.INVITE_RATE_LIMIT_MAX_REQUESTS, 30);
+const inviteMaxRequests = parseNumber(process.env.INVITE_RATE_LIMIT_MAX_REQUESTS, 50);
 
 const rateLimiter = createRateLimiter({
   name: 'global',
