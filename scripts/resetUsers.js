@@ -1,10 +1,25 @@
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
+const path = require('path');
+const dotenv = require('dotenv');
+
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 const prisma = new PrismaClient();
+const RESET_CONFIRM_TOKEN = 'RESET_USERS_CONFIRMED';
+
+const assertDestructiveScriptConfirmed = () => {
+  if (process.env.ALLOW_DESTRUCTIVE_SCRIPTS !== 'true' || process.env.CONFIRM_RESET_USERS !== RESET_CONFIRM_TOKEN) {
+    throw new Error(
+      'Blocked destructive reset. Re-run with ALLOW_DESTRUCTIVE_SCRIPTS=true and ' +
+      `CONFIRM_RESET_USERS=${RESET_CONFIRM_TOKEN}`
+    );
+  }
+};
 
 async function resetUsers() {
   try {
+    assertDestructiveScriptConfirmed();
     console.log('Connected to database');
 
     // Delete all users except dewayneshields19@gmail.com

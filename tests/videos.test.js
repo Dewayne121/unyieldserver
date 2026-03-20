@@ -104,7 +104,7 @@ describe('UNYIELD API Tests', () => {
         .post('/api/auth/register')
         .send({
           email: 'newuser@test.com',
-          password: 'password123',
+          password: 'Password123!',
           username: 'newuser',
           inviteCode: signupInviteCode.code,
         });
@@ -120,7 +120,7 @@ describe('UNYIELD API Tests', () => {
         .post('/api/auth/register')
         .send({
           email: 'missinginvite@test.com',
-          password: 'password123',
+          password: 'Password123!',
           username: 'missinginvite',
         });
 
@@ -174,6 +174,19 @@ describe('UNYIELD API Tests', () => {
         .post('/api/auth/login')
         .send({
           email: 'testuser1@test.com',
+          password: 'password123',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.token).toBeDefined();
+    });
+
+    test('POST /api/auth/login should authenticate user by username', async () => {
+      const response = await request(app)
+        .post('/api/auth/login')
+        .send({
+          username: 'testuser1',
           password: 'password123',
         });
 
@@ -255,7 +268,9 @@ describe('UNYIELD API Tests', () => {
       expect(response.status).toBe(201);
       expect(response.body.success).toBe(true);
       expect(response.body.data.workout.exercise).toBe('Bench Press');
-      expect(response.body.data.pointsEarned).toBeGreaterThan(0);
+      expect(response.body.data).toHaveProperty('strengthRatio');
+      expect(response.body.data).toHaveProperty('totalStrengthRatio');
+      expect(response.body.data).toHaveProperty('weightClass');
     });
 
     test('GET /api/workouts should return user workouts', async () => {
@@ -312,7 +327,7 @@ describe('UNYIELD API Tests', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(Array.isArray(response.body.data)).toBe(true);
+      expect(Array.isArray(response.body.data.leaderboard)).toBe(true);
     });
   });
 });

@@ -4,8 +4,85 @@ const { authenticate, optionalAuth } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { deleteVideo } = require('../services/objectStorage');
 const { calculateStrengthRatio, getWeightClass } = require('../src/utils/strengthRatio');
+const {
+  resolveCompetitiveLiftId,
+  getCompetitiveLiftLabel,
+} = require('../src/constants/competitiveLifts');
 
 const router = express.Router();
+
+// Background face blur processing for challenge submissions
+// Processes blur asynchronously without blocking the submission response
+const processBlurAsync = async (submissionId, videoUrl) => {
+  console.log(`[BLUR] Starting async blur processing for submission ${submissionId}`);
+
+  try {
+    const submission = await prisma.challengeSubmission.findUnique({
+      where: { id: submissionId },
+    });
+
+    if (!submission) {
+      console.error(`[BLUR] Submission ${submissionId} not found`);
+      return;
+    }
+
+    // Update status to processing
+    await prisma.challengeSubmission.update({
+      where: { id: submissionId },
+      data: {
+        blurStatus: 'processing',
+        blurStartedAt: new Date(),
+      },
+    });
+
+    // Call face blur API
+    const FACE_BLUR_API_URL = process.env.FACE_BLUR_API_URL || 'https://unyield-faceblur-api-production.up.railway.app';
+    const blurTimeoutMs = Number(process.env.FACE_BLUR_TIMEOUT_MS || 360000); // 6 minutes
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), blurTimeoutMs);
+
+    const response = await fetch(`${FACE_BLUR_API_URL}/blur`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoUrl }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`Face blur API returned status ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    // Update submission with blurred video
+    await prisma.challengeSubmission.update({
+      where: { id: submissionId },
+      data: {
+        blurStatus: 'blurred',
+        blurCompletedAt: new Date(),
+        videoUrl: data.data?.blurredVideoUrl || videoUrl,
+        serverVideoId: data.data?.blurredObjectName || submission.serverVideoId,
+      },
+    });
+
+    console.log(`[BLUR] Blur completed successfully for submission ${submissionId}`);
+  } catch (error) {
+    console.error(`[BLUR] Blur failed for submission ${submissionId}:`, error.message);
+
+    // Update submission with error
+    await prisma.challengeSubmission.update({
+      where: { id: submissionId },
+      data: {
+        blurStatus: 'failed',
+        blurCompletedAt: new Date(),
+        blurError: error.message || 'Unknown error during blur processing',
+      },
+    });
+  }
+};
 
 // GET /api/challenges/user/active - Get user's active challenges (must be before /:id)
 router.get('/user/active', authenticate, asyncHandler(async (req, res) => {
@@ -87,6 +164,10 @@ router.get('/my-submissions', authenticate, asyncHandler(async (req, res) => {
       value: s.value,
       videoUrl: s.videoUrl,
       status: s.status,
+      blurStatus: s.blurStatus || 'none',
+      blurStartedAt: s.blurStartedAt,
+      blurCompletedAt: s.blurCompletedAt,
+      blurError: s.blurError,
       rejectionReason: s.rejectionReason,
       verifiedAt: s.verifiedAt,
       submittedAt: s.submittedAt,
@@ -97,8 +178,15 @@ router.get('/my-submissions', authenticate, asyncHandler(async (req, res) => {
 
 // GET /api/challenges - Get all active challenges
 router.get('/', optionalAuth, asyncHandler(async (req, res) => {
-  const { region = 'global', includeExpired = 'false' } = req.query;
+  const {
+    region = 'global',
+    includeExpired = 'false',
+    competitiveOnly = 'false',
+    exercise,
+  } = req.query;
   const now = new Date();
+  const exerciseFilterId = resolveCompetitiveLiftId(exercise);
+  const isCompetitiveOnly = competitiveOnly === 'true';
 
   // Normalize region to lowercase for comparison
   const normalizedRegion = region.toLowerCase();
@@ -118,16 +206,47 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     where.endDate = { gt: now };
   }
 
+  if (isCompetitiveOnly || exerciseFilterId) {
+    where.challengeType = 'exercise';
+  }
+
   let challenges = await prisma.challenge.findMany({
     where,
     orderBy: { createdAt: 'desc' },
   });
 
+  if (isCompetitiveOnly || exerciseFilterId) {
+    challenges = challenges.filter((challenge) => {
+      const normalizedExercises = (challenge.exercises || [])
+        .map((value) => resolveCompetitiveLiftId(value))
+        .filter(Boolean);
+
+      if (exerciseFilterId) {
+        return normalizedExercises.includes(exerciseFilterId);
+      }
+
+      return normalizedExercises.length > 0;
+    });
+  }
+
   console.log('[CHALLENGES] Query params:', { region, includeExpired, normalizedRegion });
   console.log('[CHALLENGES] Found challenges:', challenges.length);
   console.log('[CHALLENGES] Challenge regions:', challenges.map(c => ({ id: c.id, title: c.title, regionScope: c.regionScope, isActive: c.isActive, endDate: c.endDate })));
 
+  const challengeIds = challenges.map((challenge) => challenge.id);
+  const participantCounts = challengeIds.length > 0
+    ? await prisma.userChallenge.groupBy({
+        by: ['challengeId'],
+        where: { challengeId: { in: challengeIds } },
+        _count: { challengeId: true },
+      })
+    : [];
+  const participantCountMap = new Map(
+    participantCounts.map((entry) => [entry.challengeId, entry._count.challengeId])
+  );
+
   // Add user progress if authenticated
+  let ucMap = new Map();
   if (req.user) {
     const userChallenges = await prisma.userChallenge.findMany({
       where: {
@@ -136,14 +255,25 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
       },
     });
 
-    const ucMap = new Map(userChallenges.map(uc => [uc.challengeId, uc]));
+    ucMap = new Map(userChallenges.map(uc => [uc.challengeId, uc]));
+  }
 
-    challenges = challenges.map(challenge => ({
+  challenges = challenges.map((challenge) => {
+    const normalizedExercises = (challenge.exercises || [])
+      .map((value) => resolveCompetitiveLiftId(value))
+      .filter(Boolean);
+    const primaryExercise = normalizedExercises[0] || null;
+
+    return {
       id: challenge.id,
       title: challenge.title,
       description: challenge.description,
       challengeType: challenge.challengeType,
       exercises: challenge.exercises,
+      normalizedExercises,
+      primaryExercise,
+      primaryExerciseName: getCompetitiveLiftLabel(primaryExercise),
+      isCompetitiveLiftChallenge: normalizedExercises.length > 0,
       customMetricName: challenge.customMetricName,
       metricType: challenge.metricType,
       target: challenge.target,
@@ -161,11 +291,12 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
       isActive: challenge.isActive,
       createdAt: challenge.createdAt,
       updatedAt: challenge.updatedAt,
+      participantCount: participantCountMap.get(challenge.id) || 0,
       joined: ucMap.has(challenge.id),
       progress: ucMap.get(challenge.id)?.progress || 0,
       completed: ucMap.get(challenge.id)?.completed || false,
-    }));
-  }
+    };
+  });
 
   res.json({
     success: true,
@@ -210,6 +341,15 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
     progress: 0,
     completed: false,
   };
+
+  const normalizedExercises = (challenge.exercises || [])
+    .map((value) => resolveCompetitiveLiftId(value))
+    .filter(Boolean);
+  const primaryExercise = normalizedExercises[0] || null;
+  responseData.normalizedExercises = normalizedExercises;
+  responseData.primaryExercise = primaryExercise;
+  responseData.primaryExerciseName = getCompetitiveLiftLabel(primaryExercise);
+  responseData.isCompetitiveLiftChallenge = normalizedExercises.length > 0;
 
   // Add user progress if authenticated
   if (req.user) {
@@ -332,21 +472,38 @@ router.get('/:id/leaderboard', asyncHandler(async (req, res) => {
     where: { challengeId: challenge.id },
     include: {
       user: {
-        select: { name: true },
+        select: {
+          id: true,
+          name: true,
+          username: true,
+          email: true,
+        },
       },
     },
-    orderBy: { progress: 'desc' },
+    orderBy: [
+      { progress: 'desc' },
+      { updatedAt: 'asc' },
+    ],
     take: parseInt(limit),
   });
 
-  const leaderboard = participants.map((p, index) => ({
-    userId: p.userId,
-    name: p.user.name,
-    progress: p.progress,
-    completed: p.completed,
-    joinedAt: p.createdAt,
-    rank: index + 1,
-  }));
+  const leaderboardWithIdentity = participants.map((p, index) => {
+    const emailAlias = p.user.email ? p.user.email.split('@')[0] : null;
+    const displayName = (p.user.name || '').trim()
+      || (p.user.username || '').trim()
+      || emailAlias
+      || 'Athlete';
+
+    return {
+      userId: p.userId,
+      name: displayName,
+      username: p.user.username || null,
+      progress: p.progress,
+      completed: p.completed,
+      joinedAt: p.createdAt,
+      rank: index + 1,
+    };
+  });
 
   const totalParticipants = await prisma.userChallenge.count({
     where: { challengeId: challenge.id }
@@ -360,7 +517,7 @@ router.get('/:id/leaderboard', asyncHandler(async (req, res) => {
         title: challenge.title,
         target: challenge.target,
       },
-      leaderboard,
+      leaderboard: leaderboardWithIdentity,
       totalParticipants,
     },
   });
@@ -368,7 +525,7 @@ router.get('/:id/leaderboard', asyncHandler(async (req, res) => {
 
 // POST /api/challenges/:id/submit - Submit a challenge entry
 router.post('/:id/submit', authenticate, asyncHandler(async (req, res) => {
-  const { exercise, reps, weight, duration, videoUri, videoUrl, originalVideoUrl, serverVideoId, notes = '' } = req.body;
+  const { exercise, reps, weight, duration, videoUri, videoUrl, originalVideoUrl, serverVideoId, blurFaces = false, notes = '' } = req.body;
 
   const challenge = await prisma.challenge.findUnique({
     where: { id: req.params.id }
@@ -401,8 +558,12 @@ router.post('/:id/submit', authenticate, asyncHandler(async (req, res) => {
   }
 
   // Validate exercise if required
+  const normalizedExercise = resolveCompetitiveLiftId(exercise) || exercise;
   if (challenge.challengeType === 'exercise') {
-    if (!exercise || !challenge.exercises.includes(exercise)) {
+    const allowedExercises = new Set(
+      (challenge.exercises || []).map((value) => resolveCompetitiveLiftId(value) || value)
+    );
+    if (!normalizedExercise || !allowedExercises.has(normalizedExercise)) {
       throw new AppError('Invalid exercise for this challenge', 400);
     }
   }
@@ -416,13 +577,13 @@ router.post('/:id/submit', authenticate, asyncHandler(async (req, res) => {
   let value = 0;
   switch (challenge.metricType) {
     case 'reps':
-      value = reps || 0;
+      value = Math.round(reps || 0);
       break;
     case 'weight':
-      value = weight || 0;
+      value = Math.round(weight || 0);
       break;
     case 'duration':
-      value = duration || 0;
+      value = Math.round(duration || 0);
       break;
     case 'workouts':
       value = 1; // Each submission counts as 1 workout
@@ -446,7 +607,7 @@ router.post('/:id/submit', authenticate, asyncHandler(async (req, res) => {
     data: {
       userId: req.user.id,
       challengeId: challenge.id,
-      exercise,
+      exercise: normalizedExercise,
       reps: reps || 0,
       weight: weight || 0,
       duration: duration || 0,
@@ -455,10 +616,23 @@ router.post('/:id/submit', authenticate, asyncHandler(async (req, res) => {
       originalVideoUrl, // Store original unblurred video for admin view
       serverVideoId,
       value,
+      blurStatus: blurFaces ? 'processing' : 'none',
+      blurStartedAt: blurFaces ? new Date() : null,
       notes,
       submittedAt: new Date(),
     },
   });
+
+  // Trigger async background blur processing if requested
+  if (blurFaces && videoUrl) {
+    console.log(`[BLUR] Triggering async blur for submission ${submission.id}`);
+    // Use setImmediate to process in background without blocking response
+    setImmediate(() => {
+      processBlurAsync(submission.id, videoUrl).catch(error => {
+        console.error(`[BLUR] Background process error:`, error);
+      });
+    });
+  }
 
   // Also create a workout log to update the user's strength ratio for main leaderboard
   const user = await prisma.user.findUnique({
@@ -480,7 +654,7 @@ router.post('/:id/submit', authenticate, asyncHandler(async (req, res) => {
   await prisma.workout.create({
     data: {
       userId: req.user.id,
-      exercise: exercise || 'Challenge',
+      exercise: normalizedExercise || 'Challenge',
       reps: reps || 0,
       weight: weight || 0,
       duration: duration || 0,
@@ -622,11 +796,6 @@ router.delete('/submissions/:id', authenticate, asyncHandler(async (req, res) =>
     throw new AppError('You can only delete your own challenge submissions', 403);
   }
 
-  // Only allow deletion of pending or rejected submissions (not approved ones)
-  if (submission.status === 'approved') {
-    throw new AppError('Cannot delete an approved submission', 400);
-  }
-
   // Delete from Object Storage
   if (submission.videoUrl) {
     try {
@@ -646,6 +815,79 @@ router.delete('/submissions/:id', authenticate, asyncHandler(async (req, res) =>
   res.json({
     success: true,
     message: 'Challenge submission deleted successfully',
+  });
+}));
+
+// GET /api/challenges/seasonal
+// Get current seasonal challenges (weekly/monthly)
+router.get('/seasonal', optionalAuth, asyncHandler(async (req, res) => {
+  const { region = 'Global', limit = 10 } = req.query;
+
+  const now = new Date();
+
+  const challenges = await prisma.challenge.findMany({
+    where: {
+      AND: [
+        { isActive: true },
+        { startDate: { lte: now } },
+        { endDate: { gt: now } },
+        { leaderboardType: 'challenge' } // seasonal challenges
+      ],
+      ...(region === 'Global' ? {} : { regionScope: region })
+    },
+    include: {
+      season: true,
+      _count: {
+        select: { userChallenges: true }
+      }
+    },
+    orderBy: { endDate: 'asc' },
+    take: parseInt(limit)
+  });
+
+  res.json({
+    success: true,
+    data: challenges.map(c => ({
+      ...c,
+      participantCount: c._count.userChallenges,
+      xpMultiplier: c.season?.xpMultiplier || 1.0,
+      prizePool: c.season?.prizePool
+    }))
+  });
+}));
+
+// POST /api/challenges/:id/leaderboard-refresh
+// Manual leaderboard refresh with rank movement detection
+router.post('/:id/leaderboard-refresh', authenticate, asyncHandler(async (req, res) => {
+  const challenge = await prisma.challenge.findUnique({
+    where: { id: req.params.id }
+  });
+
+  if (!challenge) throw new AppError('Challenge not found', 404);
+
+  // Get current rankings
+  const currentRankings = await prisma.userChallenge.findMany({
+    where: { challengeId: challenge.id },
+    orderBy: { progress: 'desc' },
+    include: { user: true }
+  });
+
+  // Take rank snapshots for movement tracking
+  for (let i = 0; i < currentRankings.length; i++) {
+    const entry = currentRankings[i];
+    const { takeRankSnapshot } = require('../services/rankNotifications');
+
+    await takeRankSnapshot(
+      entry.userId,
+      'challenge',
+      challenge.id,
+      { region: entry.user.region }
+    );
+  }
+
+  res.json({
+    success: true,
+    message: 'Rank snapshots taken'
   });
 }));
 

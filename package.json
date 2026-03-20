@@ -12,6 +12,7 @@
     "db:push": "prisma db push",
     "db:seed": "node scripts/seed.js",
     "migrate:data": "node scripts/migrate-to-postgres.js",
+    "sync:users": "node scripts/syncMongoUsersToPostgres.js",
     "prisma:studio": "prisma studio"
   },
   "keywords": [
@@ -36,6 +37,7 @@
     "fluent-ffmpeg": "^2.1.2",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.11.0",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "node-cron": "^4.2.1",

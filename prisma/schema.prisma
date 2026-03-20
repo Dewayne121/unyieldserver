@@ -57,6 +57,13 @@ enum VideoStatus {
   rejected
 }
 
+enum BlurStatus {
+  none
+  processing
+  blurred
+  failed
+}
+
 enum AppealStatus {
   pending
   approved
@@ -223,6 +230,14 @@ model User {
   reviewedReports     Report[]              @relation("ReviewedReports")
   verifiedSubmissions ChallengeSubmission[] @relation("VerifiedChallengeSubmissions")
 
+  // Core Lift Leaderboard Relations
+  coreLiftRecords    CoreLiftRecord[] @relation("UserCoreLiftRecords")
+  verifiedCoreLifts  CoreLiftRecord[] @relation("VerifiedCoreLifts")
+  rankSnapshots      RankSnapshot[]   @relation("UserRankSnapshots")
+
+  // Additional preference for home vs gym tracking
+  prefersHomeLifts  Boolean    @default(false)
+
   @@index([region])
   @@index([invitedById])
   @@index([totalPoints(sort: Desc)])
@@ -322,6 +337,13 @@ model Challenge {
   maxParticipants  Int            @default(0)
   createdById      String?
   createdBy        User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  // Season and leaderboard type support
+  seasonId        String?
+  season          Season?     @relation(fields: [seasonId], references: [id], onDelete: SetNull)
+  leaderboardType String?     @default("challenge") // 'challenge' | 'core_lift'
+  locationType    String?     // 'home' | 'gym' | null
+
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
@@ -330,6 +352,7 @@ model Challenge {
   challengeSubmissions ChallengeSubmission[]
 
   @@index([isActive, endDate])
+  @@index([seasonId])
 }
 
 model UserChallenge {
@@ -364,6 +387,10 @@ model ChallengeSubmission {
   serverVideoId   String?
   value           Int
   status          VideoStatus @default(pending)
+  blurStatus      BlurStatus @default(none)
+  blurStartedAt   DateTime?
+  blurCompletedAt DateTime?
+  blurError       String?     @db.VarChar(500)
   verifiedById    String?
   verifiedBy      User?       @relation("VerifiedChallengeSubmissions", fields: [verifiedById], references: [id], onDelete: SetNull)
   verifiedAt      DateTime?
@@ -454,4 +481,66 @@ model Report {
   @@index([status, createdAt])
   @@index([videoSubmissionId])
   @@index([reporterId])
+}
+
+// ==================== CORE LIFT LEADERBOARD ====================
+
+model CoreLiftRecord {
+  id              String      @id @default(cuid())
+  userId          String
+  user            User        @relation("UserCoreLiftRecords", fields: [userId], references: [id], onDelete: Cascade)
+  liftType        String      // 'bench_press' | 'deadlift' | 'squat'
+  locationType    String      @default("gym") // 'home' | 'gym'
+  weight          Float       @db.Real
+  reps            Int
+  estimated1RM    Float?      @db.Real
+  videoUrl        String?     @db.Text
+  originalVideoUrl String?     @db.Text
+  serverVideoId   String?
+  verified        Boolean     @default(false)
+  verifiedById    String?
+  verifiedBy      User?       @relation("VerifiedCoreLifts", fields: [verifiedById], references: [id], onDelete: SetNull)
+  verifiedAt      DateTime?
+  rejectionReason String?     @db.VarChar(500)
+  calculationMethod String?     // 'actual' | 'estimated'
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  userWeight      Float?      @db.Real
+
+  @@unique([userId, liftType, locationType])
+  @@index([userId, liftType])
+  @@index([liftType, verified(sort: Desc)])
+  @@index([locationType])
+  @@index([verified])
+}
+
+model Season {
+  id              String      @id @default(cuid())
+  name            String      // "Spring 2026", "Week 12 2026"
+  seasonType      String      // 'weekly' | 'monthly' | 'seasonal'
+  startDate       DateTime
+  endDate         DateTime
+  isActive        Boolean     @default(false)
+  xpMultiplier    Float       @default(1.0)
+  prizePool       Int?
+  challenges      Challenge[]
+
+  @@index([isActive, startDate(sort: Desc)])
+  @@index([seasonType, startDate(sort: Desc)])
+}
+
+model RankSnapshot {
+  id              String      @id @default(cuid())
+  userId          String
+  user            User        @relation("UserRankSnapshots", fields: [userId], references: [id], onDelete: Cascade)
+  context         String      // 'core_lift' | 'challenge'
+  contextId       String?     // challenge ID or lift type
+  liftType        String?     // for core lift context
+  rank            Int
+  weightClass     String?
+  region          String?
+  createdAt       DateTime     @default(now())
+
+  @@index([userId, context, createdAt(sort: Desc)])
+  @@index([context, createdAt(sort: Desc)])
 }

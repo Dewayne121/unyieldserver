@@ -252,7 +252,7 @@ router.get('/stats', authenticate, requireAdmin, asyncHandler(async (req, res) =
         pendingAppeals,
       },
       points: {
-        totalAwarded,
+        totalAwarded: totalPointsAwarded,
         today: pointsToday,
       },
       challenges: {

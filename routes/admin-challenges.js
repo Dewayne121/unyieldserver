@@ -4,6 +4,7 @@ const { authenticate } = require('../middleware/auth');
 const { requireChallengeMaster, requireChallengeModerator, logAdminAction } = require('../middleware/admin');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { notifyNewChallenge } = require('../services/notificationService');
+const { calculateStrengthRatio, getWeightClass } = require('../src/utils/strengthRatio');
 
 const router = express.Router();
 
@@ -625,42 +626,102 @@ router.post('/submissions/:id/verify',
         },
       });
 
-      if (userChallenge) {
-        let newProgress;
-        // Update progress based on completion type
-        if (submission.challenge.completionType === 'cumulative') {
-          newProgress = userChallenge.progress + submission.value;
-        } else if (submission.challenge.completionType === 'best_effort') {
-          newProgress = Math.max(userChallenge.progress, submission.value);
-        } else {
-          // single_session - use the current submission value
-          newProgress = submission.value;
-        }
+      const ensuredUserChallenge = userChallenge || await prisma.userChallenge.create({
+        data: {
+          userId: submission.userId,
+          challengeId: submission.challengeId,
+          progress: 0,
+          completed: false,
+        },
+      });
 
-        const updateData = { progress: newProgress };
+      let newProgress;
+      // Update progress based on completion type
+      if (submission.challenge.completionType === 'cumulative') {
+        newProgress = ensuredUserChallenge.progress + submission.value;
+      } else if (submission.challenge.completionType === 'best_effort') {
+        newProgress = Math.max(ensuredUserChallenge.progress, submission.value);
+      } else {
+        // single_session - use the current submission value
+        newProgress = submission.value;
+      }
 
-        // Check if challenge is completed
-        if (newProgress >= submission.challenge.target && !userChallenge.completed) {
-          updateData.completed = true;
-          updateData.completedAt = new Date();
+      const updateData = { progress: newProgress };
 
-          // Award bonus points (reward)
-          await prisma.user.update({
-            where: { id: submission.userId },
-            data: {
-              totalPoints: { increment: submission.challenge.reward || 0 },
-            },
+      // Check if challenge is completed
+      if (newProgress >= submission.challenge.target && !ensuredUserChallenge.completed) {
+        updateData.completed = true;
+        updateData.completedAt = new Date();
+
+        // Award bonus points (reward)
+        await prisma.user.update({
+          where: { id: submission.userId },
+          data: {
+            totalPoints: { increment: submission.challenge.reward || 0 },
+          },
+        });
+      }
+
+      await prisma.userChallenge.update({
+        where: {
+          userId_challengeId: {
+            userId: submission.userId,
+            challengeId: submission.challengeId,
+          },
+        },
+        data: updateData,
+      });
+
+      // Recalculate user's aggregate strength ratio for leaderboard ranking
+      // This ensures approved submissions update the user's leaderboard position
+      const user = await prisma.user.findUnique({
+        where: { id: submission.userId },
+        select: { id: true, weight: true },
+      });
+
+      // If this is an exercise challenge, convert it into a standard Workout
+      // so the user's lift appears in logs and naturally contributes to leaderboard stats
+      if (submission.challenge?.challengeType === 'exercise' && submission.exercise) {
+        let submissionStrengthRatio = 0;
+        if (user?.weight && user.weight > 0 && submission.weight && submission.reps) {
+          const weightLifted = submission.reps * submission.weight;
+          submissionStrengthRatio = calculateStrengthRatio({
+            weightLifted,
+            bodyweight: user.weight,
+            reps: submission.reps
           });
         }
 
-        await prisma.userChallenge.update({
-          where: {
-            userId_challengeId: {
-              userId: submission.userId,
-              challengeId: submission.challengeId,
-            },
+        await prisma.workout.create({
+          data: {
+            userId: submission.userId,
+            exercise: submission.exercise,
+            reps: submission.reps || 0,
+            weight: submission.weight || null,
+            duration: submission.duration || null,
+            points: 0,
+            strengthRatio: submissionStrengthRatio,
+            notes: `Challenge Submission: ${submission.challenge.title}`,
+            date: new Date(),
+          }
+        });
+      }
+
+      if (user?.weight && user.weight > 0) {
+        const allWorkouts = await prisma.workout.findMany({
+          where: { userId: submission.userId },
+          select: { strengthRatio: true },
+        });
+
+        const totalStrengthRatio = allWorkouts.reduce((sum, w) => sum + (w.strengthRatio || 0), 0);
+        const weightClass = getWeightClass(user.weight);
+
+        await prisma.user.update({
+          where: { id: submission.userId },
+          data: {
+            strengthRatio: totalStrengthRatio,
+            weightClass,
           },
-          data: updateData,
         });
       }
     }

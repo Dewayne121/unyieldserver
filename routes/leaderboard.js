@@ -1,34 +1,271 @@
+// ============================================================================
+// [ SYSTEM: LEADERBOARD MAINFRAME ]
+// [ TYPE: TACTICAL ROUTER ]
+// [ DESC: Processes operative ranks, strength ratios, and division intelligence. ]
+// ============================================================================
+
 const express = require('express');
 const prisma = require('../src/prisma');
 const { optionalAuth } = require('../middleware/auth');
-const { asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { getWeightClassLabel, formatStrengthRatio } = require('../src/utils/strengthRatio');
+const {
+  resolveCompetitiveLiftId,
+  getCompetitiveLiftById,
+  getCompetitiveLiftWorkoutAliases,
+} = require('../src/constants/competitiveLifts');
 
 const router = express.Router();
 
-// GET /api/leaderboard - Get leaderboard by strength ratio
-// Now ranks by strengthRatio instead of points
-// Supports weight class filtering
-router.get('/', optionalAuth, asyncHandler(async (req, res) => {
-  const { region = 'Global', weightClass, limit = 50, offset = 0 } = req.query;
-
-  // Build where clause
+const buildUserWhere = (region, weightClass) => {
   const where = {};
 
-  // Region filter
   if (region !== 'Global') {
     where.region = region;
   }
 
-  // Weight class filter
   if (weightClass) {
     where.weightClass = weightClass.toUpperCase();
   } else {
-    // Default: exclude users without weight from main leaderboard
     where.weightClass = { not: 'UNCLASSIFIED' };
   }
 
-  const [users, total] = await Promise.all([
+  return where;
+};
+
+const matchesLeaderboardFilters = (user, region, weightClass) => {
+  if (!user) return false;
+  if (region !== 'Global' && user.region !== region) return false;
+  if (weightClass && user.weightClass !== weightClass.toUpperCase()) return false;
+  if (!weightClass && user.weightClass === 'UNCLASSIFIED') return false;
+  return true;
+};
+
+// ----------------------------------------------------------------------------
+// [ GET ] /api/leaderboard
+// [ OP ] FETCH MAIN RANKINGS (By Strength Ratio / Weight Class)
+// ----------------------------------------------------------------------------
+router.get('/', optionalAuth, asyncHandler(async (req, res) => {
+  const {
+    region = 'Global',
+    weightClass,
+    limit = 50,
+    offset = 0,
+    exercise,
+    timeframe = 'all_time',
+  } = req.query;
+  const parsedLimit = parseInt(limit, 10);
+  const parsedOffset = parseInt(offset, 10);
+  const limitNum = Number.isFinite(parsedLimit) ? parsedLimit : 50;
+  const offsetNum = Number.isFinite(parsedOffset) ? parsedOffset : 0;
+  const liftId = resolveCompetitiveLiftId(exercise);
+
+  if (exercise && !liftId) {
+    throw new AppError('Invalid exercise. Supported lifts: bench_press, deadlift, squat.', 400);
+  }
+
+  if (liftId) {
+    const lift = getCompetitiveLiftById(liftId);
+    const userWhere = buildUserWhere(region, weightClass);
+
+    const eligibleUsers = await prisma.user.findMany({
+      where: userWhere,
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        profileImage: true,
+        region: true,
+        weight: true,
+        weightClass: true,
+      },
+    });
+
+    const eligibleUserIds = eligibleUsers.map((entry) => entry.id);
+    const aliases = getCompetitiveLiftWorkoutAliases(liftId);
+
+    const workoutWhere = {
+      userId: { in: eligibleUserIds },
+      exercise: { in: aliases },
+      weight: { not: null, gt: 0 },
+    };
+
+    const challengeWhere = {
+      userId: { in: eligibleUserIds },
+      exercise: { in: aliases },
+      weight: { gt: 0 },
+      status: 'approved',
+    };
+
+    if (timeframe === 'weekly') {
+      const oneWeekAgo = new Date(Date.now() - (7 * 24 * 60 * 60 * 1000));
+      workoutWhere.date = { gte: oneWeekAgo };
+      challengeWhere.verifiedAt = { gte: oneWeekAgo };
+    }
+
+    const [workouts, challengeSubmissions] = eligibleUserIds.length > 0
+      ? await Promise.all([
+          prisma.workout.findMany({
+            where: workoutWhere,
+            select: {
+              userId: true,
+              weight: true,
+              reps: true,
+              date: true,
+            },
+          }),
+          prisma.challengeSubmission.findMany({
+            where: challengeWhere,
+            select: {
+              userId: true,
+              weight: true,
+              reps: true,
+              verifiedAt: true,
+              createdAt: true,
+            },
+          }),
+        ])
+      : [[], []];
+
+    const combinedWorkouts = [
+      ...workouts,
+      ...challengeSubmissions.map((sub) => ({
+        userId: sub.userId,
+        weight: sub.weight,
+        reps: sub.reps,
+        date: sub.verifiedAt || sub.createdAt,
+      })),
+    ];
+
+    const aggregateByUser = new Map();
+    combinedWorkouts.forEach((workout) => {
+      const current = aggregateByUser.get(workout.userId);
+      const candidateWeight = Number(workout.weight) || 0;
+      const candidateReps = workout.reps || 0;
+
+      if (!current) {
+        aggregateByUser.set(workout.userId, {
+          bestValue: candidateWeight,
+          bestReps: candidateReps,
+          bestAt: workout.date,
+        });
+        return;
+      }
+
+      const shouldReplace =
+        candidateWeight > current.bestValue ||
+        (candidateWeight === current.bestValue && candidateReps > current.bestReps);
+
+      if (shouldReplace) {
+        aggregateByUser.set(workout.userId, {
+          bestValue: candidateWeight,
+          bestReps: candidateReps,
+          bestAt: workout.date,
+        });
+      }
+    });
+
+    const ranked = eligibleUsers
+      .filter((entry) => aggregateByUser.has(entry.id))
+      .map((entry) => {
+        const aggregate = aggregateByUser.get(entry.id);
+        return {
+          id: entry.id,
+          username: entry.username,
+          name: entry.name,
+          profileImage: entry.profileImage,
+          region: entry.region,
+          weight: entry.weight,
+          weightClass: entry.weightClass,
+          weightClassLabel: getWeightClassLabel(entry.weightClass),
+          exercise: lift.id,
+          exerciseName: lift.label,
+          bestValue: aggregate.bestValue,
+          bestReps: aggregate.bestReps,
+          bestAt: aggregate.bestAt,
+          points: Math.round(aggregate.bestValue),
+        };
+      })
+      .sort((a, b) => {
+        if (b.bestValue !== a.bestValue) return b.bestValue - a.bestValue;
+        if (b.bestReps !== a.bestReps) return b.bestReps - a.bestReps;
+        return new Date(a.bestAt) - new Date(b.bestAt);
+      });
+
+    const leaderboard = ranked
+      .slice(offsetNum, offsetNum + limitNum)
+      .map((entry, index) => ({
+        ...entry,
+        rank: offsetNum + index + 1,
+      }));
+
+    let currentUserRank = null;
+    if (req.user) {
+      const currentUser = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: {
+          id: true,
+          username: true,
+          name: true,
+          profileImage: true,
+          region: true,
+          weight: true,
+          weightClass: true,
+        },
+      });
+
+      if (currentUser) {
+        const disqualified = !matchesLeaderboardFilters(currentUser, region, weightClass);
+        const rankIndex = ranked.findIndex((entry) => entry.id === currentUser.id);
+        const rankedEntry = rankIndex >= 0 ? ranked[rankIndex] : null;
+
+        currentUserRank = {
+          id: currentUser.id,
+          username: currentUser.username,
+          name: currentUser.name,
+          profileImage: currentUser.profileImage,
+          region: currentUser.region,
+          weight: currentUser.weight,
+          weightClass: currentUser.weightClass,
+          weightClassLabel: getWeightClassLabel(currentUser.weightClass),
+          exercise: lift.id,
+          exerciseName: lift.label,
+          bestValue: rankedEntry?.bestValue || 0,
+          bestReps: rankedEntry?.bestReps || 0,
+          bestAt: rankedEntry?.bestAt || null,
+          rank: rankedEntry ? rankIndex + 1 : null,
+          hasEntry: !!rankedEntry,
+          disqualified,
+          points: rankedEntry ? Math.round(rankedEntry.bestValue) : 0,
+        };
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        leaderboard,
+        total: ranked.length,
+        currentUser: currentUserRank,
+        limit: limitNum,
+        offset: offsetNum,
+        metricType: 'max_weight',
+        liftUnit: 'kg',
+        filters: {
+          region,
+          weightClass,
+          exercise: lift.id,
+          timeframe: timeframe === 'weekly' ? 'weekly' : 'all_time',
+        },
+      },
+    });
+  }
+
+  // [1] CONSTRUCT TACTICAL FILTERS
+  const where = buildUserWhere(region, weightClass);
+
+  // [2] EXECUTE DATABASE QUERY
+  const [operatives, total] = await Promise.all([
     prisma.user.findMany({
       where,
       select: {
@@ -42,19 +279,18 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         strengthRatio: true,
         streak: true,
         accolades: true,
-        // Include legacy points for backward compatibility
-        totalPoints: true,
+        totalPoints: true, // Legacy points included for system compatibility
         weeklyPoints: true,
       },
       orderBy: { strengthRatio: 'desc' },
-      skip: parseInt(offset),
-      take: parseInt(limit),
+      skip: offsetNum,
+      take: limitNum,
     }),
     prisma.user.count({ where }),
   ]);
 
-  // Add ranks and format response
-  const leaderboard = users.map((user, index) => ({
+  // [3] PROCESS OPERATIVE DATA
+  const leaderboard = operatives.map((user, index) => ({
     id: user.id,
     username: user.username,
     name: user.name,
@@ -67,13 +303,13 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     ratioDisplay: formatStrengthRatio(user.strengthRatio),
     streak: user.streak,
     accolades: user.accolades || [],
-    rank: parseInt(offset) + index + 1,
-    // Legacy field for backward compatibility
-    points: Math.round((user.strengthRatio || 0) * 100),
+    rank: offsetNum + index + 1,
+    points: Math.round((user.strengthRatio || 0) * 100), // Legacy integration
   }));
 
-  // Find current user's position
+  // [4] CALCULATE CURRENT OPERATIVE'S STANDING
   let currentUserRank = null;
+  
   if (req.user) {
     const currentUser = await prisma.user.findUnique({
       where: { id: req.user.id }
@@ -82,9 +318,10 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     if (currentUser) {
       const userRatio = currentUser.strengthRatio || 0;
 
-      // Check if user qualifies for this filtered view
-      const userQualifies = (!weightClass || currentUser.weightClass === weightClass.toUpperCase()) &&
-                           currentUser.weightClass !== 'UNCLASSIFIED';
+      // Verify if operative is eligible for the current sector view
+      const userQualifies = 
+        (!weightClass || currentUser.weightClass === weightClass.toUpperCase()) &&
+        currentUser.weightClass !== 'UNCLASSIFIED';
 
       let userPosition = 0;
       if (userQualifies) {
@@ -116,26 +353,30 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     }
   }
 
+  // [5] TRANSMIT PAYLOAD
   res.json({
     success: true,
     data: {
       leaderboard,
       total,
       currentUser: currentUserRank,
-      limit: parseInt(limit),
-      offset: parseInt(offset),
-      filters: { region, weightClass },
+      limit: limitNum,
+      offset: offsetNum,
+      filters: { region, weightClass, exercise: null, timeframe: 'all_time' },
     },
   });
 }));
 
-// GET /api/leaderboard/top - Get top users
+// ----------------------------------------------------------------------------
+// [ GET ] /api/leaderboard/top
+// [ OP ] FETCH ELITE OPERATIVES (Top 10 Overall)
+// ----------------------------------------------------------------------------
 router.get('/top', asyncHandler(async (req, res) => {
   const { count = 10, region = 'Global' } = req.query;
 
   const where = region !== 'Global' ? { region } : {};
 
-  const users = await prisma.user.findMany({
+  const topOperativesRaw = await prisma.user.findMany({
     where,
     select: {
       id: true,
@@ -150,7 +391,7 @@ router.get('/top', asyncHandler(async (req, res) => {
     take: parseInt(count),
   });
 
-  const topUsers = users.map((user, index) => ({
+  const topUsers = topOperativesRaw.map((user, index) => ({
     id: user.id,
     name: user.name,
     profileImage: user.profileImage,
@@ -168,13 +409,16 @@ router.get('/top', asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/leaderboard/weekly - Get weekly leaderboard
+// ----------------------------------------------------------------------------
+// [ GET ] /api/leaderboard/weekly
+// [ OP ] FETCH WEEKLY CAMPAIGN STANDINGS
+// ----------------------------------------------------------------------------
 router.get('/weekly', optionalAuth, asyncHandler(async (req, res) => {
   const { region = 'Global', limit = 50 } = req.query;
 
   const where = region !== 'Global' ? { region } : {};
 
-  const users = await prisma.user.findMany({
+  const weeklyOperativesRaw = await prisma.user.findMany({
     where,
     select: {
       id: true,
@@ -189,7 +433,7 @@ router.get('/weekly', optionalAuth, asyncHandler(async (req, res) => {
     take: parseInt(limit),
   });
 
-  const rankedList = users.map((user, index) => ({
+  const rankedList = weeklyOperativesRaw.map((user, index) => ({
     id: user.id,
     name: user.name,
     profileImage: user.profileImage,
@@ -207,15 +451,17 @@ router.get('/weekly', optionalAuth, asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/leaderboard/monthly - Get monthly competition leaderboard (top 3)
-// This is specifically for the Monthly Drop feature
+// ----------------------------------------------------------------------------
+// [ GET ] /api/leaderboard/monthly
+// [ OP ] FETCH MONTHLY PODIUM (Top 3 for Supply Drop)
+// ----------------------------------------------------------------------------
 router.get('/monthly', optionalAuth, asyncHandler(async (req, res) => {
   const { region = 'Global' } = req.query;
 
   const where = region !== 'Global' ? { region } : {};
 
-  // Get top 3 users for monthly podium
-  const users = await prisma.user.findMany({
+  // Extract top 3 operatives for monthly podium deployment
+  const podiumOperativesRaw = await prisma.user.findMany({
     where,
     select: {
       id: true,
@@ -232,7 +478,7 @@ router.get('/monthly', optionalAuth, asyncHandler(async (req, res) => {
     take: 3,
   });
 
-  const monthlyPodium = users.map((user, index) => ({
+  const monthlyPodium = podiumOperativesRaw.map((user, index) => ({
     id: user.id,
     username: user.username,
     name: user.name,
@@ -246,12 +492,13 @@ router.get('/monthly', optionalAuth, asyncHandler(async (req, res) => {
     points: user.totalPoints,
   }));
 
-  // Also include current user's rank if not in top 3
+  // Append current user's intel if they are not in the top 3
   let currentUserRank = null;
   if (req.user) {
     const currentUser = await prisma.user.findUnique({
       where: { id: req.user.id }
     });
+    
     if (currentUser) {
       const userPosition = await prisma.user.count({
         where: {
@@ -285,13 +532,13 @@ router.get('/monthly', optionalAuth, asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/leaderboard/around-me - Get users around current user
+// ----------------------------------------------------------------------------
+// [ GET ] /api/leaderboard/around-me
+// [ OP ] RADAR SCAN: FETCH ADJACENT OPERATIVES
+// ----------------------------------------------------------------------------
 router.get('/around-me', optionalAuth, asyncHandler(async (req, res) => {
   if (!req.user) {
-    return res.json({
-      success: true,
-      data: [],
-    });
+    return res.json({ success: true, data: [] });
   }
 
   const { region = 'Global', range = 5 } = req.query;
@@ -299,16 +546,14 @@ router.get('/around-me', optionalAuth, asyncHandler(async (req, res) => {
   const currentUser = await prisma.user.findUnique({
     where: { id: req.user.id }
   });
+  
   if (!currentUser) {
-    return res.json({
-      success: true,
-      data: [],
-    });
+    return res.json({ success: true, data: [] });
   }
 
   const where = region !== 'Global' ? { region } : {};
 
-  // Get users above current user
+  // Scan for operatives ranked higher
   const usersAbove = await prisma.user.findMany({
     where: {
       ...where,
@@ -326,7 +571,7 @@ router.get('/around-me', optionalAuth, asyncHandler(async (req, res) => {
     take: parseInt(range),
   });
 
-  // Get users below current user
+  // Scan for operatives ranked lower
   const usersBelow = await prisma.user.findMany({
     where: {
       ...where,
@@ -345,10 +590,10 @@ router.get('/around-me', optionalAuth, asyncHandler(async (req, res) => {
     take: parseInt(range),
   });
 
-  // Combine and sort
+  // Compile full radar sweep
   const allUsers = [...usersAbove.reverse(), currentUser, ...usersBelow];
 
-  // Calculate ranks
+  // Calculate true positional rank
   const userPosition = await prisma.user.count({
     where: {
       ...where,
@@ -373,7 +618,10 @@ router.get('/around-me', optionalAuth, asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/leaderboard/weight-classes - Get available weight classes with user counts
+// ----------------------------------------------------------------------------
+// [ GET ] /api/leaderboard/weight-classes
+// [ OP ] FETCH DIVISION INTEL (Weight Classes)
+// ----------------------------------------------------------------------------
 router.get('/weight-classes', asyncHandler(async (req, res) => {
   const weightClasses = [
     { id: 'W55_64', label: '55-64 kg', minWeight: 55, maxWeight: 64 },
@@ -384,7 +632,7 @@ router.get('/weight-classes', asyncHandler(async (req, res) => {
     { id: 'W110_PLUS', label: '110+ kg', minWeight: 110, maxWeight: null },
   ];
 
-  // Get user counts per weight class
+  // Aggregate troop counts per division
   const counts = await Promise.all(
     weightClasses.map(async (wc) => {
       const count = await prisma.user.count({
@@ -394,7 +642,7 @@ router.get('/weight-classes', asyncHandler(async (req, res) => {
     })
   );
 
-  // Also get count of unclassified users
+  // Isolate unclassified targets
   const unclassifiedCount = await prisma.user.count({
     where: { weightClass: 'UNCLASSIFIED' }
   });

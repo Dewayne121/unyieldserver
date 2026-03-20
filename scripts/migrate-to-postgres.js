@@ -10,6 +10,10 @@
 
 const { MongoClient } = require('mongodb');
 const { PrismaClient } = require('@prisma/client');
+const path = require('path');
+const dotenv = require('dotenv');
+
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 // Source MongoDB connection
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb+srv://dewayneshields19_db_user:T8xbe5Fejize96Vc@cluster0.jmsudaz.mongodb.net/unyielding?retryWrites=true&w=majority';
@@ -346,8 +350,8 @@ async function migrate() {
         }
 
         const csData = {
-          userId: mappedUserId,
-          challengeId: mappedChallengeId,
+          user: { connect: { id: mappedUserId } },
+          challenge: { connect: { id: mappedChallengeId } },
           exercise: mongoCS.exercise,
           reps: mongoCS.reps || 0,
           weight: mongoCS.weight || null,
@@ -368,7 +372,6 @@ async function migrate() {
         // Add verifiedBy relation if exists
         if (mappedVerifiedBy) {
           csData.verifiedBy = { connect: { id: mappedVerifiedBy } };
-          delete csData.verifiedById;
         }
 
         await prisma.challengeSubmission.create({ data: csData });

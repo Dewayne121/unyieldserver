@@ -3,8 +3,20 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Workout = require('../models/Workout');
 
+const CLEAN_CONFIRM_TOKEN = 'CLEAN_DB_CONFIRMED';
+
+const assertDestructiveScriptConfirmed = () => {
+  if (process.env.ALLOW_DESTRUCTIVE_SCRIPTS !== 'true' || process.env.CONFIRM_CLEAN_DATABASE !== CLEAN_CONFIRM_TOKEN) {
+    throw new Error(
+      'Blocked destructive cleanup. Re-run with ALLOW_DESTRUCTIVE_SCRIPTS=true and ' +
+      `CONFIRM_CLEAN_DATABASE=${CLEAN_CONFIRM_TOKEN}`
+    );
+  }
+};
+
 async function cleanDatabase() {
   try {
+    assertDestructiveScriptConfirmed();
     // Connect to MongoDB
     console.log('Connecting to MongoDB...');
     await mongoose.connect(process.env.MONGODB_URI);
