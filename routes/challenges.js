@@ -3,6 +3,7 @@ const prisma = require('../src/prisma');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { deleteVideo } = require('../services/objectStorage');
+const { requestFaceBlur, normalizeFaceBlurResult } = require('../services/faceBlur');
 const { calculateStrengthRatio, getWeightClass } = require('../src/utils/strengthRatio');
 const {
   resolveCompetitiveLiftId,
@@ -35,27 +36,10 @@ const processBlurAsync = async (submissionId, videoUrl) => {
       },
     });
 
-    // Call face blur API
-    const FACE_BLUR_API_URL = process.env.FACE_BLUR_API_URL || 'https://unyield-faceblur-api-production.up.railway.app';
-    const blurTimeoutMs = Number(process.env.FACE_BLUR_TIMEOUT_MS || 360000); // 6 minutes
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), blurTimeoutMs);
-
-    const response = await fetch(`${FACE_BLUR_API_URL}/blur`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoUrl }),
-      signal: controller.signal,
+    const rawData = await requestFaceBlur(videoUrl);
+    const data = await normalizeFaceBlurResult(rawData, {
+      sourceVideoUrl: videoUrl,
     });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      throw new Error(`Face blur API returned status ${response.status}`);
-    }
-
-    const data = await response.json();
 
     // Update submission with blurred video
     await prisma.challengeSubmission.update({
@@ -63,8 +47,9 @@ const processBlurAsync = async (submissionId, videoUrl) => {
       data: {
         blurStatus: 'blurred',
         blurCompletedAt: new Date(),
-        videoUrl: data.data?.blurredVideoUrl || videoUrl,
-        serverVideoId: data.data?.blurredObjectName || submission.serverVideoId,
+        videoUrl: data.blurredVideoUrl || videoUrl,
+        serverVideoId: data.objectName || submission.serverVideoId,
+        blurError: null,
       },
     });
 

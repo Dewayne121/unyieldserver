@@ -15,6 +15,7 @@ const router = express.Router();
 const VALID_LOCATION_TYPES = new Set(['home', 'gym']);
 const LOCATION_MARKER_REGEX = /\[loc:(home|gym)\]/i;
 const VERIFIED_CORE_MARKER = '[verified:core]';
+const PENDING_CORE_MARKER = '[pending:core]';
 
 const normalizeLocationType = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -137,6 +138,11 @@ router.get('/leaderboard', optionalAuth, asyncHandler(async (req, res) => {
       exercise: { in: aliases },
       weight: { gt: 0 },
       reps: { gt: 0 },
+      videoSubmission: {
+        is: {
+          status: 'approved',
+        },
+      },
       notes: {
         contains: VERIFIED_CORE_MARKER,
         mode: 'insensitive',
@@ -254,6 +260,10 @@ router.post('/submit', authenticate, asyncHandler(async (req, res) => {
     reps,
     locationType = 'gym',
     notes = '',
+    videoUrl,
+    originalVideoUrl = null,
+    thumbnailUrl = null,
+    duration = null,
   } = req.body || {};
 
   const liftId = resolveCompetitiveLiftId(liftType);
@@ -274,6 +284,16 @@ router.post('/submit', authenticate, asyncHandler(async (req, res) => {
   if (!normalizedLocation) {
     throw new AppError('Invalid locationType. Supported values: home, gym.', 400);
   }
+
+  const sanitizedVideoUrl = String(videoUrl || '').trim();
+  if (!sanitizedVideoUrl) {
+    throw new AppError('Video URL is required. Upload a video before submitting a core lift.', 400);
+  }
+
+  const sanitizedOriginalVideoUrl = String(originalVideoUrl || '').trim() || null;
+  const sanitizedThumbnailUrl = String(thumbnailUrl || '').trim() || null;
+  const parsedDuration = parseInt(duration, 10);
+  const normalizedDuration = Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : null;
 
   // Prevent duplicate imports when a challenge submission is pushed to core lifts.
   const notesText = String(notes || '');
@@ -301,14 +321,16 @@ router.post('/submit', authenticate, asyncHandler(async (req, res) => {
 
   const user = await prisma.user.findUnique({
     where: { id: req.user.id },
-    select: { id: true, weight: true, streakBest: true },
+    select: { id: true, weight: true, streakBest: true, accolades: true },
   });
   if (!user) {
     throw new AppError('User not found', 404);
   }
 
+  const isAdmin = Array.isArray(user.accolades) && user.accolades.includes('admin');
   const locationTag = `[loc:${normalizedLocation}]`;
-  const combinedNotes = [locationTag, VERIFIED_CORE_MARKER, String(notes || '').trim()].filter(Boolean).join(' ').trim();
+  const verificationTag = isAdmin ? VERIFIED_CORE_MARKER : PENDING_CORE_MARKER;
+  const combinedNotes = [locationTag, verificationTag, '[video:submitted]', String(notes || '').trim()].filter(Boolean).join(' ').trim();
   const estimated1RMValue = estimate1RM(parsedWeight, parsedReps);
 
   const workout = await prisma.workout.create({
@@ -355,10 +377,31 @@ router.post('/submit', authenticate, asyncHandler(async (req, res) => {
     },
   });
 
+  const videoSubmission = await prisma.videoSubmission.create({
+    data: {
+      userId: req.user.id,
+      workoutId: workout.id,
+      exercise: liftId,
+      reps: parsedReps,
+      weight: parsedWeight,
+      duration: normalizedDuration,
+      videoUrl: sanitizedVideoUrl,
+      originalVideoUrl: sanitizedOriginalVideoUrl,
+      thumbnailUrl: sanitizedThumbnailUrl,
+      status: isAdmin ? 'approved' : 'pending',
+      ...(isAdmin && {
+        verifiedByName: 'UNYIELD',
+        verifiedAt: new Date(),
+      }),
+    },
+  });
+
   res.status(201).json({
     success: true,
     data: {
       workoutId: workout.id,
+      videoSubmissionId: videoSubmission.id,
+      videoStatus: videoSubmission.status,
       liftType: liftId,
       estimated1RM: estimated1RMValue,
       locationType: normalizedLocation,
@@ -375,6 +418,11 @@ router.get('/my-records', authenticate, asyncHandler(async (req, res) => {
       userId: req.user.id,
       weight: { gt: 0 },
       reps: { gt: 0 },
+      videoSubmission: {
+        is: {
+          status: 'approved',
+        },
+      },
       notes: {
         contains: VERIFIED_CORE_MARKER,
         mode: 'insensitive',

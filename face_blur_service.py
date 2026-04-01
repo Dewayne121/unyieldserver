@@ -209,7 +209,7 @@ def blur_video():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))
-    debug = os.environ.get('NODE_ENV') !== 'production'
+    debug = os.environ.get('NODE_ENV') != 'production'
 
     print('[FACE_BLUR] Starting face blur microservice...')
     print(f'[FACE_BLUR] Running on port {port}')

@@ -9,8 +9,10 @@
     "test": "jest --detectOpenHandles",
     "test:coverage": "jest --coverage --detectOpenHandles",
     "postinstall": "prisma generate",
+    "db:check": "node scripts/checkPostgresConnection.js",
     "db:push": "prisma db push",
     "db:seed": "node scripts/seed.js",
+    "user:reset-password": "node scripts/resetLocalUserPassword.js",
     "migrate:data": "node scripts/migrate-to-postgres.js",
     "sync:users": "node scripts/syncMongoUsersToPostgres.js",
     "prisma:studio": "prisma studio"

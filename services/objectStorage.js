@@ -1,8 +1,44 @@
 const os = require("oci-objectstorage");
+const fs = require("fs");
+const path = require("path");
 const { getOCIConfig } = require("../config/oci");
 const { AppError } = require("../middleware/errorHandler");
 
 let _objectStorageClient = null;
+const localUploadsRoot = path.join(__dirname, "..", "uploads");
+
+if (!fs.existsSync(localUploadsRoot)) {
+  fs.mkdirSync(localUploadsRoot, { recursive: true });
+}
+
+const sanitizeFileName = (value) => String(value || "video.mp4")
+  .replace(/[^\w.\-]/g, "_")
+  .replace(/_+/g, "_");
+
+const resolveLocalPathFromObjectName = (objectName) => {
+  const normalized = String(objectName || "").replace(/^\/+/, "");
+  const safeRelative = normalized.split(/[\\/]+/).filter(Boolean).join(path.sep);
+  const fullPath = path.resolve(localUploadsRoot, safeRelative);
+  if (!fullPath.startsWith(path.resolve(localUploadsRoot))) {
+    throw new Error("Invalid local object path");
+  }
+  return fullPath;
+};
+
+const uploadVideoLocally = (fileBuffer, fileName) => {
+  const timestamp = Date.now();
+  const randomSuffix = Math.round(Math.random() * 1e9);
+  const objectName = `videos/${timestamp}-${randomSuffix}-${sanitizeFileName(path.basename(fileName || "video.mp4"))}`;
+  const localPath = resolveLocalPathFromObjectName(objectName);
+
+  fs.mkdirSync(path.dirname(localPath), { recursive: true });
+  fs.writeFileSync(localPath, fileBuffer);
+
+  return {
+    objectName,
+    publicUrl: `/uploads/${objectName}`,
+  };
+};
 
 /**
  * Get OCI Object Storage client (lazy-loaded)
@@ -38,6 +74,10 @@ async function uploadVideo(fileBuffer, fileName, contentType = 'video/mp4') {
     contentType,
     bufferLength: fileBuffer?.length
   });
+
+  if (!fileBuffer || fileBuffer.length === 0) {
+    throw new AppError("Video upload failed: empty file buffer", 400);
+  }
 
   try {
     console.log('[OCI SERVICE] Getting storage context...');
@@ -98,6 +138,17 @@ async function uploadVideo(fileBuffer, fileName, contentType = 'video/mp4') {
     };
 
   } catch (error) {
+    const missingOracleConfig =
+      /Missing required Oracle credentials|Oracle Cloud credentials not properly configured/i.test(String(error?.message || ""));
+    if (missingOracleConfig) {
+      console.warn('[OCI SERVICE] Oracle credentials missing. Falling back to local uploads directory.');
+      try {
+        return uploadVideoLocally(fileBuffer, fileName);
+      } catch (fallbackError) {
+        throw new AppError(`Video upload failed (local fallback): ${fallbackError.message}`, 500);
+      }
+    }
+
     console.error('[OCI SERVICE] Upload error:', {
       message: error.message,
       name: error.name,
@@ -168,18 +219,24 @@ async function createPreAuthenticatedRequest(objectName) {
  */
 async function deleteVideo(videoUrl) {
   try {
-    const { objectStorageClient, namespace, bucketName } = getStorageContext();
-    // Extract object name from URL if it's a full URL
-    let objectName;
-    if (videoUrl.startsWith('http')) {
-      // Parse the URL to get object name
-      const urlParts = videoUrl.split('/');
-      objectName = urlParts.slice(-2).join('/'); // Gets /videos/filename
-    } else {
-      objectName = videoUrl;
+    let objectName = String(videoUrl || '').trim();
+
+    // Local fallback URLs are served as /uploads/<objectName>
+    if (objectName.includes('/uploads/')) {
+      const markerIndex = objectName.indexOf('/uploads/');
+      const relativeObjectName = objectName.slice(markerIndex + '/uploads/'.length);
+      const localPath = resolveLocalPathFromObjectName(relativeObjectName);
+      if (fs.existsSync(localPath)) {
+        fs.unlinkSync(localPath);
+      }
+      return;
     }
 
-    console.log(`[OCI] Deleting video: ${objectName}`);
+    const { objectStorageClient, namespace, bucketName } = getStorageContext();
+    if (objectName.startsWith('http')) {
+      const urlParts = objectName.split('/');
+      objectName = urlParts.slice(-2).join('/');
+    }
 
     const deleteRequest = {
       namespaceName: namespace,

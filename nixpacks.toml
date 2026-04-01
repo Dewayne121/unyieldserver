@@ -1,6 +1,0 @@
-# Explicitly use Node.js provider only.
-# The requirements.txt in this directory is a legacy reference file for the
-# deprecated face_blur_service.py and is not used at runtime.
-# Without this, Nixpacks may detect both package.json and requirements.txt
-# and attempt a multi-language (Node + Python) build.
-providers = ["node"]

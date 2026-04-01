@@ -1,11 +1,13 @@
 const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const prisma = require('../src/prisma');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { uploadVideo, deleteVideo } = require('../services/objectStorage');
+const { requestFaceBlur, normalizeFaceBlurResult } = require('../services/faceBlur');
 
 const router = express.Router();
 
@@ -15,11 +17,17 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Use the OS temp directory so uploads work on Windows and Linux.
+const tempUploadDir = path.join(os.tmpdir(), 'unyield-uploads');
+if (!fs.existsSync(tempUploadDir)) {
+  fs.mkdirSync(tempUploadDir, { recursive: true });
+}
+
 // Configure multer for disk storage (to avoid OOM on Render free tier)
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      cb(null, '/tmp'); // Use /tmp for ephemeral storage
+      cb(null, tempUploadDir);
     },
     filename: (req, file, cb) => {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -96,16 +104,15 @@ router.post('/upload', authenticate, upload.single('video'), asyncHandler(async 
       req.file.mimetype
     );
 
-    // Clean up temp file
-    fs.unlinkSync(req.file.path);
-    console.log('[UPLOAD ROUTE] Temp file cleaned up');
-
     const { objectName, publicUrl } = uploadResult;
+    const resolvedPublicUrl = String(publicUrl || '').startsWith('http')
+      ? publicUrl
+      : `${req.protocol}://${req.get('host')}${publicUrl}`;
 
     res.status(201).json({
       success: true,
       data: {
-        videoUrl: publicUrl,
+        videoUrl: resolvedPublicUrl,
         objectName: objectName,
         size: req.file.size,
         mimetype: req.file.mimetype,
@@ -115,6 +122,15 @@ router.post('/upload', authenticate, upload.single('video'), asyncHandler(async 
   } catch (error) {
     console.error('[UPLOAD ROUTE] Upload error:', error.message);
     throw new AppError(`Video upload failed: ${error.message}`, 500);
+  } finally {
+    if (req.file?.path && fs.existsSync(req.file.path)) {
+      try {
+        fs.unlinkSync(req.file.path);
+        console.log('[UPLOAD ROUTE] Temp file cleaned up');
+      } catch (cleanupError) {
+        console.warn('[UPLOAD ROUTE] Failed to clean temp file:', cleanupError.message);
+      }
+    }
   }
 }));
 
@@ -614,49 +630,16 @@ router.post('/blur', authenticate, asyncHandler(async (req, res) => {
   }
 
   try {
-    // Call the faceblurapi service
-    const FACE_BLUR_API_URL = process.env.FACE_BLUR_API_URL || 'https://unyield-faceblur-api-production.up.railway.app';
-    const blurTimeoutMs = Number(process.env.FACE_BLUR_TIMEOUT_MS || 360000);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), blurTimeoutMs);
-    let response;
-    try {
-      response = await fetch(`${FACE_BLUR_API_URL}/blur`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ videoUrl }),
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    let data = null;
-    try {
-      data = await response.json();
-    } catch (parseError) {
-      throw new AppError(`Face blur service returned invalid JSON (${response.status})`, 502);
-    }
-
-    if (!response.ok || !data.success) {
-      throw new AppError(data.error || 'Face blur service failed', 502);
-    }
+    const rawData = await requestFaceBlur(videoUrl);
+    const requestOrigin = `${req.protocol}://${req.get('host')}`;
+    const data = await normalizeFaceBlurResult(rawData, {
+      sourceVideoUrl: videoUrl,
+      requestOrigin,
+    });
 
     res.json({
       success: true,
-      data: {
-        blurredVideoUrl: data.data.blurredVideoUrl,
-        originalVideoUrl: data.data.originalVideoUrl,
-        objectName: data.data.blurredObjectName || null,
-        originalObjectName: data.data.originalObjectName || null,
-        facesFound: data.data.facesBlurred || data.data.facesDetected || 0,
-        facesDetected: data.data.facesDetected || 0,
-        facesBlurred: data.data.facesBlurred || data.data.facesDetected || 0,
-        framesProcessed: data.data.framesProcessed || 0,
-        privacyFallbackApplied: !!data.data.privacyFallbackApplied,
-        temporalPropagationApplied: !!data.data.temporalPropagationApplied,
-        propagatedFaces: data.data.propagatedFaces || 0,
-      }
+      data,
     });
 
   } catch (error) {

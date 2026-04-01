@@ -6,6 +6,7 @@ const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { REGIONS, GOALS, ACCOLADES } = require('../services/userService');
 const { sendPushNotification } = require('../services/notificationService');
 const { getWeightClass } = require('../src/utils/strengthRatio');
+const { resolveCompetitiveLiftId } = require('../src/constants/competitiveLifts');
 
 const router = express.Router();
 
@@ -20,6 +21,43 @@ const VALID_NOTIFICATION_TYPES = new Set([
 ]);
 const DEFAULT_NOTIFICATION_TYPE = 'welcome';
 const NOTIFICATION_CHUNK_SIZE = 50;
+const VERIFIED_CORE_MARKER = '[verified:core]';
+const PENDING_CORE_MARKER = '[pending:core]';
+const VIDEO_SUBMITTED_MARKER = '[video:submitted]';
+
+const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const removeMarkerFromNotes = (notes, marker) => String(notes || '')
+  .replace(new RegExp(`\\s*${escapeRegex(marker)}\\s*`, 'ig'), ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const ensureMarkerInNotes = (notes, marker) => {
+  const current = String(notes || '').trim();
+  if (!current) return marker;
+  const markerRegex = new RegExp(escapeRegex(marker), 'i');
+  if (markerRegex.test(current)) return current;
+  return `${current} ${marker}`.trim();
+};
+
+const shouldUpdateCoreLiftWorkoutNotes = (workout, fallbackExercise) => {
+  if (!workout?.id) return false;
+  const resolvedLiftId = resolveCompetitiveLiftId(workout.exercise || fallbackExercise);
+  if (!resolvedLiftId) return false;
+  const notes = String(workout.notes || '').toLowerCase();
+  return notes.includes(VIDEO_SUBMITTED_MARKER)
+    || notes.includes(PENDING_CORE_MARKER)
+    || notes.includes(VERIFIED_CORE_MARKER);
+};
+
+const buildCoreLiftNotesForVerification = (notes, action) => {
+  let updated = removeMarkerFromNotes(notes, PENDING_CORE_MARKER);
+  updated = removeMarkerFromNotes(updated, VERIFIED_CORE_MARKER);
+  if (action === 'approve') {
+    updated = ensureMarkerInNotes(updated, VERIFIED_CORE_MARKER);
+  }
+  return updated || null;
+};
 
 const normalizeNotificationType = (type) => {
   const normalized = String(type || '').trim().toLowerCase();
@@ -924,9 +962,28 @@ router.post('/videos/:id/verify',
       updateData.pointsAwarded = parseInt(pointsAwarded) || 0;
     }
 
-    const updatedVideo = await prisma.videoSubmission.update({
-      where: { id: req.params.id },
-      data: updateData,
+    const updatedVideo = await prisma.$transaction(async (tx) => {
+      const nextVideo = await tx.videoSubmission.update({
+        where: { id: req.params.id },
+        data: updateData,
+      });
+
+      if (video.workoutId) {
+        const workout = await tx.workout.findUnique({
+          where: { id: video.workoutId },
+          select: { id: true, notes: true, exercise: true },
+        });
+
+        if (shouldUpdateCoreLiftWorkoutNotes(workout, video.exercise)) {
+          const nextNotes = buildCoreLiftNotesForVerification(workout.notes, action);
+          await tx.workout.update({
+            where: { id: workout.id },
+            data: { notes: nextNotes },
+          });
+        }
+      }
+
+      return nextVideo;
     });
 
     // Update action type and details for audit log

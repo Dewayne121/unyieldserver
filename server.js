@@ -249,8 +249,7 @@ app.use((req, res, next) => {
 app.use(rateLimiter);
 
 // Serve uploaded videos as static files
-// DISABLED: Videos now stored in Oracle Cloud Object Storage
-// app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Root endpoint
 app.get('/', (req, res) => {
