@@ -43,13 +43,16 @@ const parsePositiveInt = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const buildUserWhere = ({ region, weightClass }) => {
+const buildUserWhere = ({ region, weightClass, gender }) => {
   const where = {};
   if (region && region !== 'Global') {
     where.region = region;
   }
   if (weightClass) {
     where.weightClass = String(weightClass).toUpperCase();
+  }
+  if (gender && ['male', 'female'].includes(gender)) {
+    where.gender = gender;
   }
   return where;
 };
@@ -61,6 +64,7 @@ const formatLiftRecord = ({ user, aggregate, rank, liftId, liftLabel }) => ({
   username: user.username || null,
   profileImage: user.profileImage || null,
   region: user.region || 'Global',
+  gender: user.gender || null,
   weightClass: user.weightClass || 'UNCLASSIFIED',
   weightClassLabel: getWeightClassLabel(user.weightClass),
   weight: user.weight || null,
@@ -83,6 +87,7 @@ router.get('/leaderboard', optionalAuth, asyncHandler(async (req, res) => {
     region = 'Global',
     weightClass = null,
     locationType = null,
+    gender = null,
     limit = 100,
     offset = 0,
   } = req.query;
@@ -102,7 +107,7 @@ router.get('/leaderboard', optionalAuth, asyncHandler(async (req, res) => {
 
   const lift = getCompetitiveLiftById(liftId);
   const aliases = getCompetitiveLiftWorkoutAliases(liftId);
-  const userWhere = buildUserWhere({ region, weightClass });
+  const userWhere = buildUserWhere({ region, weightClass, gender });
 
   const users = await prisma.user.findMany({
     where: userWhere,

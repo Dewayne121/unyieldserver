@@ -26,6 +26,7 @@ const formatUserResponse = (user) => ({
   age: user.age,
   weightClass: user.weightClass,
   strengthRatio: user.strengthRatio,
+  gender: user.gender,
   totalPoints: user.totalPoints,
   weeklyPoints: user.weeklyPoints,
   rank: user.rank,
@@ -73,6 +74,7 @@ router.patch('/profile', authenticate, asyncHandler(async (req, res) => {
     'weight',
     'height',
     'age',
+    'gender',
   ];
 
   const updateData = {};
@@ -100,6 +102,10 @@ router.patch('/profile', authenticate, asyncHandler(async (req, res) => {
       // Validate fitnessLevel
       if (key === 'fitnessLevel' && !FITNESS_LEVELS.includes(req.body[key])) {
         throw new AppError(`Invalid fitness level. Must be one of: ${FITNESS_LEVELS.join(', ')}`, 400);
+      }
+      // Validate gender
+      if (key === 'gender' && req.body[key] !== null && !['male', 'female'].includes(req.body[key])) {
+        throw new AppError('Invalid gender. Must be male or female', 400);
       }
       // Validate profileImage size (max 8MB base64 - approximately 6MB actual image)
       if (key === 'profileImage' && req.body[key] && req.body[key].length > 8000000) {

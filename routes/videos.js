@@ -621,31 +621,9 @@ router.post('/reports/:id/review', authenticate, asyncHandler(async (req, res) =
   });
 }));
 
-// POST /api/videos/blur - Blur faces in a video (proxies to faceblurapi service)
+// POST /api/videos/blur - DISABLED
 router.post('/blur', authenticate, asyncHandler(async (req, res) => {
-  const { videoUrl } = req.body;
-
-  if (!videoUrl) {
-    throw new AppError('videoUrl is required', 400);
-  }
-
-  try {
-    const rawData = await requestFaceBlur(videoUrl);
-    const requestOrigin = `${req.protocol}://${req.get('host')}`;
-    const data = await normalizeFaceBlurResult(rawData, {
-      sourceVideoUrl: videoUrl,
-      requestOrigin,
-    });
-
-    res.json({
-      success: true,
-      data,
-    });
-
-  } catch (error) {
-    console.error('[BLUR] Error:', error.message);
-    throw new AppError(error.message || 'Face blur service unavailable', 502);
-  }
+  res.json({ success: false, error: 'Face blur has been disabled' });
 }));
 
 module.exports = router;

@@ -61,6 +61,7 @@ const formatUserResponse = (user) => ({
   age: user.age,
   weightClass: user.weightClass,
   strengthRatio: user.strengthRatio,
+  gender: user.gender,
   totalPoints: user.totalPoints,
   weeklyPoints: user.weeklyPoints,
   rank: user.rank,

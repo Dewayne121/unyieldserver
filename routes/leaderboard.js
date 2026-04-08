@@ -17,7 +17,7 @@ const {
 
 const router = express.Router();
 
-const buildUserWhere = (region, weightClass) => {
+const buildUserWhere = (region, weightClass, gender) => {
   const where = {};
 
   if (region !== 'Global') {
@@ -30,14 +30,19 @@ const buildUserWhere = (region, weightClass) => {
     where.weightClass = { not: 'UNCLASSIFIED' };
   }
 
+  if (gender && ['male', 'female'].includes(gender)) {
+    where.gender = gender;
+  }
+
   return where;
 };
 
-const matchesLeaderboardFilters = (user, region, weightClass) => {
+const matchesLeaderboardFilters = (user, region, weightClass, gender) => {
   if (!user) return false;
   if (region !== 'Global' && user.region !== region) return false;
   if (weightClass && user.weightClass !== weightClass.toUpperCase()) return false;
   if (!weightClass && user.weightClass === 'UNCLASSIFIED') return false;
+  if (gender && ['male', 'female'].includes(gender) && user.gender !== gender) return false;
   return true;
 };
 
@@ -49,6 +54,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
   const {
     region = 'Global',
     weightClass,
+    gender,
     limit = 50,
     offset = 0,
     exercise,
@@ -66,7 +72,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
 
   if (liftId) {
     const lift = getCompetitiveLiftById(liftId);
-    const userWhere = buildUserWhere(region, weightClass);
+    const userWhere = buildUserWhere(region, weightClass, gender);
 
     const eligibleUsers = await prisma.user.findMany({
       where: userWhere,
@@ -215,7 +221,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
       });
 
       if (currentUser) {
-        const disqualified = !matchesLeaderboardFilters(currentUser, region, weightClass);
+        const disqualified = !matchesLeaderboardFilters(currentUser, region, weightClass, gender);
         const rankIndex = ranked.findIndex((entry) => entry.id === currentUser.id);
         const rankedEntry = rankIndex >= 0 ? ranked[rankIndex] : null;
 
@@ -262,7 +268,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
   }
 
   // [1] CONSTRUCT TACTICAL FILTERS
-  const where = buildUserWhere(region, weightClass);
+  const where = buildUserWhere(region, weightClass, gender);
 
   // [2] EXECUTE DATABASE QUERY
   const [operatives, total] = await Promise.all([
@@ -296,6 +302,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     name: user.name,
     profileImage: user.profileImage,
     region: user.region,
+    gender: user.gender,
     weight: user.weight,
     weightClass: user.weightClass,
     weightClassLabel: getWeightClassLabel(user.weightClass),
