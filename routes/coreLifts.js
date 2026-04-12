@@ -94,7 +94,7 @@ router.get('/leaderboard', optionalAuth, asyncHandler(async (req, res) => {
 
   const liftId = resolveCompetitiveLiftId(liftType);
   if (!liftId) {
-    throw new AppError('Invalid liftType. Supported lifts: bench_press, deadlift, squat.', 400);
+    throw new AppError('Invalid liftType. Supported lifts: ' + COMPETITIVE_LIFTS.map(l => l.id).join(', ') + '.', 400);
   }
 
   const locationFilter = normalizeLocationType(locationType);
@@ -273,7 +273,7 @@ router.post('/submit', authenticate, asyncHandler(async (req, res) => {
 
   const liftId = resolveCompetitiveLiftId(liftType);
   if (!liftId) {
-    throw new AppError('Invalid liftType. Supported lifts: bench_press, deadlift, squat.', 400);
+    throw new AppError('Invalid liftType. Supported lifts: ' + COMPETITIVE_LIFTS.map(l => l.id).join(', ') + '.', 400);
   }
 
   const parsedWeight = Number(weight);
