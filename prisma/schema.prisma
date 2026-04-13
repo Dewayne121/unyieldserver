@@ -349,6 +349,7 @@ model Challenge {
   season          Season?     @relation(fields: [seasonId], references: [id], onDelete: SetNull)
   leaderboardType String?     @default("challenge") // 'challenge' | 'core_lift'
   locationType    String?     // 'home' | 'gym' | null
+  gender          String?     // null = all, 'male', 'female'
 
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt

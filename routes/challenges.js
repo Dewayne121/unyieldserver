@@ -200,6 +200,12 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     orderBy: { createdAt: 'desc' },
   });
 
+  // Filter by gender: show gender-neutral challenges + those matching the user's gender
+  const userGender = (req.user?.gender || '').toLowerCase();
+  if (userGender) {
+    challenges = challenges.filter(c => !c.gender || c.gender.toLowerCase() === userGender);
+  }
+
   if (isCompetitiveOnly || exerciseFilterId) {
     challenges = challenges.filter((challenge) => {
       const normalizedExercises = (challenge.exercises || [])
@@ -273,6 +279,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
       winnerCriteria: challenge.winnerCriteria,
       maxParticipants: challenge.maxParticipants,
       createdBy: challenge.createdBy,
+      gender: challenge.gender,
       isActive: challenge.isActive,
       createdAt: challenge.createdAt,
       updatedAt: challenge.updatedAt,
@@ -319,6 +326,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
     winnerCriteria: challenge.winnerCriteria,
     maxParticipants: challenge.maxParticipants,
     createdBy: challenge.createdBy,
+    gender: challenge.gender,
     isActive: challenge.isActive,
     createdAt: challenge.createdAt,
     updatedAt: challenge.updatedAt,
@@ -376,6 +384,14 @@ router.post('/:id/join', authenticate, asyncHandler(async (req, res) => {
 
   if (!challenge.isActive) {
     throw new AppError('This challenge is no longer active', 400);
+  }
+
+  // Gender gate: block users who don't match the challenge's gender
+  if (challenge.gender) {
+    const joinUser = await prisma.user.findUnique({ where: { id: req.user.id }, select: { gender: true } });
+    if (joinUser?.gender && joinUser.gender.toLowerCase() !== challenge.gender.toLowerCase()) {
+      throw new AppError('This challenge is not available for your gender', 403);
+    }
   }
 
   if (new Date(challenge.endDate) < new Date()) {

@@ -167,6 +167,7 @@ router.get('/',
           maxParticipants: challenge.maxParticipants,
           createdBy: challenge.createdBy,
           isActive: challenge.isActive,
+          gender: challenge.gender,
           createdAt: challenge.createdAt,
           updatedAt: challenge.updatedAt,
           participantCount,
@@ -270,6 +271,7 @@ router.post('/',
       completionType = 'cumulative',
       winnerCriteria = 'first_to_complete',
       maxParticipants = 0,
+      gender = null,
     } = req.body;
 
     // Validation
@@ -309,6 +311,7 @@ router.post('/',
         winnerCriteria,
         maxParticipants,
         createdById: req.user.id,
+        gender: gender || null,
         isActive: true,
       },
     });
@@ -366,6 +369,7 @@ router.patch('/:id',
       'winnerCriteria',
       'maxParticipants',
       'isActive',
+      'gender',
     ];
 
     const updates = {};
