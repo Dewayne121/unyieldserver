@@ -371,6 +371,9 @@ router.post('/apple', authRateLimiter, asyncHandler(async (req, res) => {
   }
 
   // Try to find existing user by appleId first, then by email
+  let isNewUser = false;
+
+  // Try to find existing user by appleId first, then by email
   let user = await prisma.user.findUnique({
     where: { appleId },
   });
@@ -399,7 +402,7 @@ router.post('/apple', authRateLimiter, asyncHandler(async (req, res) => {
       suffix++;
     }
 
-    const name = fullName || 'Athlete';
+    const name = fullName || null;
 
     user = await prisma.user.create({
       data: {
@@ -413,6 +416,7 @@ router.post('/apple', authRateLimiter, asyncHandler(async (req, res) => {
     });
 
     console.log(`New Apple user: ${user.username} (${user.email})`);
+    isNewUser = true;
   }
 
   const token = generateToken(user);
@@ -422,6 +426,7 @@ router.post('/apple', authRateLimiter, asyncHandler(async (req, res) => {
     data: {
       user: formatUserResponse(user),
       token,
+      isNewUser,
     },
   });
 }));
