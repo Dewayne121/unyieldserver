@@ -402,7 +402,7 @@ router.post('/apple', authRateLimiter, asyncHandler(async (req, res) => {
       suffix++;
     }
 
-    const name = fullName || null;
+    const name = fullName || '';
 
     user = await prisma.user.create({
       data: {
