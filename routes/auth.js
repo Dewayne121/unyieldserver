@@ -362,6 +362,70 @@ router.post('/refresh', authenticate, asyncHandler(async (req, res) => {
   });
 }));
 
+// POST /api/auth/apple - Sign in / Sign up with Apple
+router.post('/apple', authRateLimiter, asyncHandler(async (req, res) => {
+  const { appleId, email, fullName, identityToken } = req.body;
+
+  if (!appleId) {
+    throw new AppError('Apple ID is required', 400);
+  }
+
+  // Try to find existing user by appleId first, then by email
+  let user = await prisma.user.findUnique({
+    where: { appleId },
+  });
+
+  if (!user && email) {
+    user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+    });
+    // If found by email, link the Apple ID
+    if (user && !user.appleId) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { appleId, provider: 'apple' },
+      });
+    }
+  }
+
+  if (!user) {
+    // Create new user from Apple credentials
+    // Generate a unique username from the Apple user ID
+    const baseUsername = `apple_${appleId.replace('.', '').slice(0, 12)}`;
+    let username = baseUsername;
+    let suffix = 1;
+    while (await prisma.user.findUnique({ where: { username } })) {
+      username = `${baseUsername}_${suffix}`;
+      suffix++;
+    }
+
+    const name = fullName || 'Athlete';
+
+    user = await prisma.user.create({
+      data: {
+        appleId,
+        email: email ? email.toLowerCase() : `${appleId}@apple.placeholder`,
+        username,
+        name,
+        provider: 'apple',
+        password: null,
+      },
+    });
+
+    console.log(`New Apple user: ${user.username} (${user.email})`);
+  }
+
+  const token = generateToken(user);
+
+  res.json({
+    success: true,
+    data: {
+      user: formatUserResponse(user),
+      token,
+    },
+  });
+}));
+
 // POST /api/auth/logout - Logout
 router.post('/logout', authenticate, asyncHandler(async (req, res) => {
   res.json({

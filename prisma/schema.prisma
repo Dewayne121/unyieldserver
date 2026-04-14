@@ -195,6 +195,7 @@ model User {
   weightClass      WeightClass  @default(UNCLASSIFIED)
   strengthRatio    Float        @default(0)
   gender           Gender?
+  appleId          String?      @unique
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
