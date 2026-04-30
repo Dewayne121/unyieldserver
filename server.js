@@ -79,6 +79,7 @@ const notificationRoutes = require('./routes/notifications');
 const videoRoutes = require('./routes/videos');
 const adminRoutes = require('./routes/admin');
 const adminChallengeRoutes = require('./routes/admin-challenges');
+const analyticsRoutes = require('./routes/analytics');
 
 // Import middleware
 const { errorHandler } = require('./middleware/errorHandler');
@@ -268,6 +269,7 @@ app.get('/', (req, res) => {
       notifications: '/api/notifications',
       videos: '/api/videos',
       admin: '/api/admin',
+      analytics: '/api/analytics',
       uploads: '/uploads',
     },
   });
@@ -302,6 +304,8 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/challenges', adminChallengeRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/admin/analytics', analyticsRoutes);
 
 // 404 handler
 app.use((req, res) => {

@@ -552,3 +552,30 @@ model RankSnapshot {
   @@index([userId, context, createdAt(sort: Desc)])
   @@index([context, createdAt(sort: Desc)])
 }
+
+// ==================== ANALYTICS ====================
+
+model AnalyticsEvent {
+  id            String   @id @default(cuid())
+  eventId       String   @unique              // Client-generated UUID for dedup
+  name          String                         // Event name from taxonomy
+  category      String                         // AUTH, WORKOUTS, CHALLENGES, etc.
+  userId        String?                        // Nullable for anonymous
+  anonymousId   String?
+  sessionId     String?
+  properties    Json      @default("{}")
+  platform      String?
+  appVersion    String?
+  osVersion     String?
+  deviceType    String?
+  locale        String?
+  timezone      String?
+  consentState  Json?
+  receivedAt    DateTime  @default(now())
+
+  @@index([name, receivedAt(sort: Desc)])
+  @@index([category, receivedAt(sort: Desc)])
+  @@index([userId, receivedAt(sort: Desc)])
+  @@index([receivedAt(sort: Desc)])
+  @@index([sessionId])
+}
