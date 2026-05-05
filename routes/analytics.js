@@ -294,6 +294,44 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/admin/analytics/dau — daily active users line graph data
+// ---------------------------------------------------------------------------
+router.get(
+  '/dau',
+  authenticate,
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const days = Math.min(parseInt(req.query.days, 10) || 30, 90);
+
+    const rows = await prisma.$queryRaw`
+      SELECT
+        DATE("receivedAt") AS day,
+        COUNT(DISTINCT COALESCE("userId", "anonymousId")) AS users
+      FROM "AnalyticsEvent"
+      WHERE "receivedAt" >= NOW() - (${days} || ' days')::interval
+      GROUP BY DATE("receivedAt")
+      ORDER BY day ASC
+    `;
+
+    const data = rows.map(r => ({
+      day: r.day instanceof Date ? r.day.toISOString().split('T')[0] : String(r.day),
+      users: Number(r.users),
+    }));
+
+    // Current online: distinct users with event in last 5 min
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const onlineRows = await prisma.$queryRaw`
+      SELECT COUNT(DISTINCT COALESCE("userId", "anonymousId")) AS count
+      FROM "AnalyticsEvent"
+      WHERE "receivedAt" >= ${fiveMinAgo}
+    `;
+    const currentOnline = Number(onlineRows[0]?.count || 0);
+
+    res.json({ data, currentOnline });
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 function safeParseJSON(val) {
