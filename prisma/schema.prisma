@@ -242,6 +242,9 @@ model User {
   verifiedCoreLifts  CoreLiftRecord[] @relation("VerifiedCoreLifts")
   rankSnapshots      RankSnapshot[]   @relation("UserRankSnapshots")
 
+  // Purchases
+  purchases          Purchase[]
+
   // Additional preference for home vs gym tracking
   prefersHomeLifts  Boolean    @default(false)
 
@@ -578,4 +581,24 @@ model AnalyticsEvent {
   @@index([userId, receivedAt(sort: Desc)])
   @@index([receivedAt(sort: Desc)])
   @@index([sessionId])
+}
+
+// ==================== PURCHASES ====================
+
+model Purchase {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sku           String
+  transactionId String    @unique
+  status        String    @default("completed") // completed | pending | refunded
+  challengeId   String?
+  attempts      Int?
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([sku, status])
+  @@index([userId, sku])
 }
