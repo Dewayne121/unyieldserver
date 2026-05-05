@@ -358,4 +358,38 @@ function buildDefaultFunnels() {
   ];
 }
 
+// ---------------------------------------------------------------------------
+// POST /api/purchases/record — record a purchase from the client
+// ---------------------------------------------------------------------------
+router.post(
+  '/record',
+  optionalAuth,
+  asyncHandler(async (req, res) => {
+    const { sku, transactionId, userId } = req.body;
+    if (!sku) {
+      return res.status(400).json({ success: false, error: 'sku is required' });
+    }
+
+    // Store as an analytics event so it shows up in dashboards
+    const uid = userId || req.user?.id || null;
+    const row = {
+      eventId: transactionId || `purch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      name: 'purchase_completed',
+      category: 'MONETIZATION',
+      userId: uid,
+      sessionId: null,
+      properties: JSON.stringify({ sku, transaction_id: transactionId || null }),
+      receivedAt: new Date(),
+    };
+
+    try {
+      await prisma.analyticsEvent.create({ data: row });
+    } catch (err) {
+      if (!err.message?.includes('Unique')) throw err;
+    }
+
+    res.json({ success: true });
+  })
+);
+
 module.exports = router;

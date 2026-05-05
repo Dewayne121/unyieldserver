@@ -306,6 +306,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/admin/challenges', adminChallengeRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/admin/analytics', analyticsRoutes);
+app.use('/api/purchases', analyticsRoutes);
 
 // 404 handler
 app.use((req, res) => {
