@@ -12,17 +12,47 @@ router.post(
   '/record',
   optionalAuth,
   asyncHandler(async (req, res) => {
-    const { sku, transactionId, userId, challengeId, attempts } = req.body;
+    const {
+      sku,
+      transactionId,
+      userId,
+      challengeId,
+      challenge_id,
+      attempts,
+      purchaseToken,
+      purchaseId,
+      transactionDate,
+      platform,
+      store,
+      durationHours,
+      multiplier,
+    } = req.body;
     if (!sku) {
       return res.status(400).json({ success: false, error: 'sku is required' });
     }
 
-    const uid = userId || req.user?.id || null;
+    if (!KNOWN_SKUS.has(sku)) {
+      return res.status(400).json({ success: false, error: 'unknown sku' });
+    }
+
+    const uid = req.user?.id || userId || null;
     if (!uid) {
       return res.status(400).json({ success: false, error: 'userId is required' });
     }
 
     const txId = transactionId || `purch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const normalizedChallengeId = challengeId || challenge_id || null;
+    const normalizedAttempts = Number.isInteger(attempts)
+      ? attempts
+      : sku === 'com.unyield.extra_attempt'
+        ? 1
+        : null;
+    const metadata = {
+      purchaseId: purchaseId || null,
+      transactionDate: transactionDate || null,
+      durationHours: durationHours || null,
+      multiplier: multiplier || null,
+    };
 
     // Create Purchase record (dedup on transactionId)
     try {
@@ -32,9 +62,13 @@ router.post(
           sku,
           transactionId: txId,
           status: 'completed',
-          challengeId: challengeId || null,
-          attempts: attempts || null,
+          challengeId: normalizedChallengeId,
+          attempts: normalizedAttempts,
           expiresAt: computeExpiry(sku),
+          platform: platform || null,
+          store: store || null,
+          purchaseToken: purchaseToken || null,
+          metadata,
         },
       });
 
@@ -46,7 +80,13 @@ router.post(
             name: 'purchase_completed',
             category: 'MONETIZATION',
             userId: uid,
-            properties: JSON.stringify({ sku, transaction_id: txId }),
+            properties: {
+              sku,
+              transaction_id: txId,
+              challenge_id: normalizedChallengeId,
+              platform: platform || null,
+              store: store || null,
+            },
           },
         });
       } catch {}
@@ -55,7 +95,10 @@ router.post(
     } catch (err) {
       // Duplicate transactionId — idempotent success
       if (err.message?.includes('Unique') || err.code === 'P2002') {
-        return res.json({ success: true, duplicate: true });
+        const purchase = await prisma.purchase.findUnique({
+          where: { transactionId: txId },
+        });
+        return res.json({ success: true, duplicate: true, purchase });
       }
       throw err;
     }
@@ -84,6 +127,18 @@ router.get(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+const KNOWN_SKUS = new Set([
+  'com.unyield.challenge_entry',
+  'com.unyield.frame.silver',
+  'com.unyield.frame.gold',
+  'com.unyield.frame.elite',
+  'com.unyield.frame.champion',
+  'com.unyield.rank_highlight',
+  'com.unyield.extra_attempt',
+  'com.unyield.xpboost.1hr',
+  'com.unyield.xpboost.24hr',
+]);
+
 function computeExpiry(sku) {
   if (sku === 'com.unyield.rank_highlight') {
     const d = new Date();
